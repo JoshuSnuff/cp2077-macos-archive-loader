@@ -18,7 +18,15 @@ Archive mod loader for Cyberpunk 2077 on macOS (Apple Silicon). Injects `.archiv
 
 ## Usage
 
-**Inject mods:**
+**Launch the game with mods:**
+
+```bash
+./launch_modded.sh
+```
+
+Full modded launch sequence — injects archive mods, compiles REDscript, processes input mappings, loads RED4ext via `DYLD_INSERT_LIBRARIES`, launches the game, and restores pristine archives on exit. Set this as your custom launch command in Heroic or whatever launcher you use.
+
+**Inject mods only:**
 
 ```bash
 ./inject_archives.sh
@@ -36,17 +44,25 @@ Reverts all modified archives to their pristine state and removes any loose patc
 
 ## How it works
 
+`launch_modded.sh` runs these steps in order:
+
 1. **Restore** — APFS-clones (`cp -c`) each file from `pristine/` back to the game directory, then removes any `basegame_99_*` loose files and the `mod/` staging area left by a previous run.
 2. **Stage** — APFS-clones every `.archive` from `enabled/` into `archive/Mac/mod/`.
 3. **Patch** — Runs `cp2077-patcher patch --game <dir> --mods <files>` to merge mod archives into the game's resource index.
 4. **Verify** — Runs `cp2077-patcher verify` to confirm archive integrity.
+5. **REDscript** — Compiles scripts via `engine/tools/scc`.
+6. **Input mappings** — Processes custom bindings via `engine/tools/inputloader.pl`.
+7. **RED4ext** — Injects `RED4ext.dylib` (and `FridaGadget.dylib` if present) via `DYLD_INSERT_LIBRARIES`.
+8. **Launch** — Starts the game, waits for exit.
+9. **Cleanup** — Restores pristine archives so the game directory is always vanilla at rest.
 
 ## Directory layout
 
 ```
 .
 ├── cp2077-patcher          # arm64 macOS patcher binary
-├── inject_archives.sh      # inject mods into the game
+├── launch_modded.sh        # full modded launch sequence
+├── inject_archives.sh      # inject archive mods
 ├── restore_archives.sh     # restore vanilla archives
 ├── enabled/                # your .archive mod files (not tracked)
 ├── pristine/               # vanilla archive backups (not tracked)
