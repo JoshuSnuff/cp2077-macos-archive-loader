@@ -12,22 +12,25 @@ RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$GAME_DIR"
 
-# 1. Archive mod injection (restores pristine first, then patches if mods exist)
+# 1. Warn if the live RED4ext/runtime files have drifted from the repository.
+"$RUNTIME_DIR/sync_gamefiles.sh" --check || true
+
+# 2. Archive mod injection (restores pristine first, then patches if mods exist)
 "$RUNTIME_DIR/inject_archives.sh" || true
 
-# 2. Compile REDscript
+# 3. Compile REDscript
 "$GAME_DIR/engine/tools/scc" -compile "$GAME_DIR/r6/scripts" || true
 
-# 3. Process input mappings
+# 4. Process input mappings
 "$GAME_DIR/engine/tools/inputloader.pl" || true
 
-# 4. RED4ext injection
+# 5. RED4ext injection
 INJECT_LIBS="$GAME_DIR/red4ext/RED4ext.dylib"
 [ -f "$GAME_DIR/red4ext/FridaGadget.dylib" ] && INJECT_LIBS="$INJECT_LIBS:$GAME_DIR/red4ext/FridaGadget.dylib"
 export DYLD_INSERT_LIBRARIES="$INJECT_LIBS"
 export DYLD_FORCE_FLAT_NAMESPACE=1
 
-# 5. Restore pristine archives on every exit path — clean quit, crash, or Ctrl-C.
+# 6. Restore pristine archives on every exit path — clean quit, crash, or Ctrl-C.
 # A patched install stays broken until this runs, so it must not be skippable.
 restored=0
 restore_on_exit() {
@@ -39,7 +42,7 @@ trap restore_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# 6. Launch game (no exec — need post-exit cleanup)
+# 7. Launch game (no exec — need post-exit cleanup)
 game_exit=0
 "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" "$@" || game_exit=$?
 

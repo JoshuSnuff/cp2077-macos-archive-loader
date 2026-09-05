@@ -9,6 +9,12 @@ logs/*
 !logs/.gitkeep
 build/*
 !build/.gitkeep
+gamefiles/red4ext/RED4ext.dylib
+gamefiles/red4ext/FridaGadget.dylib
+gamefiles/engine/tools/scc
+gamefiles/engine/tools/libscc_lib.dylib
+gamefiles/engine/tools/inputloader.pl
+gamefiles/r6/scripts/
 .claude/
 CLAUDE.md
 AGENTS.md

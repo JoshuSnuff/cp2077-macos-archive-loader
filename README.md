@@ -3,7 +3,7 @@
 Archive mod loader for Cyberpunk 2077 on macOS (Apple Silicon).
 
 Cyberpunk 2077 has no mod-loading hook on macOS. This repo works around that with
-three Bash scripts and a prebuilt Swift binary that rewrites the game's own
+four Bash scripts and a prebuilt Swift binary that rewrites the game's own
 archives before launch and puts the originals back afterwards.
 
 > Tested against the GOG build, game version 2.3.1, on Apple Silicon. Other
@@ -17,7 +17,7 @@ Last verified 2026-09-05 against game 2.3.1 with 33 mods enabled.
 |---|---|
 | `.archive` mods that add new resources | Working |
 | `.archive` mods that override stock resources | Working, with known metadata defects (below) |
-| REDscript mods (`r6/scripts`) | Working — 59 `.reds` files compiling |
+| REDscript mods (`r6/scripts`) | Working when installed locally |
 | Input remapping (`inputloader.pl`) | Working |
 | Restore-to-vanilla on every exit path | Working — verified against clean exit, non-zero exit, SIGSEGV, and Ctrl-C |
 | Crash on quit | Fixed 2026-09-05 (see RED4ext below) |
@@ -78,10 +78,18 @@ observable outcome, not its mechanism.
    ```bash
    export CP2077_GAME_DIR="/path/to/Cyberpunk 2077"
    ```
-   All three scripts exit 1 without it.
+   All four scripts exit 1 without it.
 3. Populate `pristine/content/` and `pristine/ep1/` by hand from a **clean**
    install. Nothing does this for you and nothing will warn you.
-4. Drop `.archive` mods into `enabled/`.
+4. Restore the tracked RED4ext runtime files into the game:
+   ```bash
+   ./sync_gamefiles.sh
+   ```
+5. Drop `.archive` mods into `enabled/`.
+
+The third-party RED4ext, Frida, redscript compiler, and Input Loader files are
+not committed. See [`gamefiles/README.md`](gamefiles/README.md) for their pinned
+versions and download locations.
 
 Load order is the `sort -z` order of `enabled/`, which is why real mod names carry
 `#`, `0_`, or `x_` prefixes to force position.
@@ -89,21 +97,25 @@ Load order is the `sort -z` order of `enabled/`, which is why real mod names car
 ## Usage
 
 ```bash
-./launch_modded.sh      # inject → scc → inputloader → RED4ext → game → restore
-./inject_archives.sh    # inject only (safe standalone, for testing)
-./restore_archives.sh   # restore vanilla only (manual recovery after a crash)
+./launch_modded.sh           # check → inject → compile → game → restore
+./inject_archives.sh         # inject only (safe standalone, for testing)
+./restore_archives.sh        # restore vanilla only (manual crash recovery)
+./sync_gamefiles.sh --check  # report RED4ext drift without changing files
+./sync_gamefiles.sh          # copy tracked RED4ext files from repo to game
+./sync_gamefiles.sh --pull   # capture live RED4ext edits into the repo
 ```
 
-`launch_modded.sh` suffixes each step with `|| true` on purpose: a failed
-REDscript compile or missing inputloader must not stop the game launching. It
-deliberately does not `exec`, because it has to regain control to restore.
+`launch_modded.sh` runs the runtime-file check as a non-fatal warning. It also
+suffixes injection, REDscript compilation, and input loading with `|| true` on
+purpose: those failures must not stop the game launching. It deliberately does
+not `exec`, because it has to regain control to restore.
 
 If a restore is ever missed anyway (`SIGKILL`, power loss), `./restore_archives.sh`
 is the manual recovery, and the next `inject_archives.sh` restores first
 regardless.
 
-Every run writes a timestamped log to `logs/`; override with `INJECT_LOG_FILE` /
-`RESTORE_LOG_FILE`.
+Every run writes a timestamped log to `logs/`; override with `INJECT_LOG_FILE`,
+`RESTORE_LOG_FILE`, or `SYNC_LOG_FILE`.
 
 ## The patcher
 
@@ -157,11 +169,13 @@ null entries in RED4ext's `DetourTransaction`, and at process exit
 but it produced a crash report every session.
 
 Fixed by a Frida guard that replaces `App::Destruct` with a no-op, in
-`red4ext/red4ext_hooks.js`. Verified: exit code 0, no crash report, RED4ext log
-still completes.
+`gamefiles/red4ext/red4ext_hooks.js`. Verified: exit code 0, no crash report,
+RED4ext log still completes.
 
-> This fix currently lives **only in the game directory** and is not tracked here.
-> A reinstall reverts it. See the vendoring spec below.
+The repository copies of the RED4ext hook and configuration under `gamefiles/`
+are authoritative. `sync_gamefiles.sh` restores them after a reinstall and warns
+before launch if the live copies drift. Personal REDscript mods remain local and
+are never synchronized into this public repository.
 
 ## Known defects
 
@@ -188,10 +202,7 @@ are the only ones doing anything.
    named fields onto the stock record, resolve conflict winners globally with
    Windows first-wins semantics, patch every official owner of a duplicated hash,
    and extend `verify` to compare each output record against what was intended.
-2. **Track the game-directory files.** The hook script, RED4ext configs, and
-   `r6/scripts` mods exist only in the game directory, where a reinstall reverts
-   them.
-3. **Consolidate loose archives.** Emit one deterministic archive containing only
+2. **Consolidate loose archives.** Emit one deterministic archive containing only
    genuinely new resources, instead of a whole-mod copy per contributing mod.
    Depends on 1.
 
@@ -207,6 +218,8 @@ and CET, and it is a substantial reverse-engineering effort with uncertain payof
 ├── launch_modded.sh        # full modded launch sequence
 ├── inject_archives.sh      # inject archive mods
 ├── restore_archives.sh     # restore vanilla archives
+├── sync_gamefiles.sh       # synchronize tracked runtime files
+├── gamefiles/              # RED4ext hook, configuration, and signing files
 ├── enabled/                # your .archive mods (contents ignored)
 ├── pristine/               # vanilla baselines — irreplaceable (contents ignored)
 │   ├── content/            #   32 archives
