@@ -46,9 +46,14 @@ restore_pristine
 # Collect enabled mods
 mod_files=()
 if [ -d "$ENABLED_DIR" ]; then
+    # LC_ALL=C is load-bearing: the patcher resolves conflicts in ASCII order
+    # (Windows' first-archive-wins rule), while a bare `sort -z` under a UTF-8
+    # locale weights punctuation loosely and orders the '#'-prefixed mods
+    # differently. Without it the logged order is not the order that decides
+    # which mod wins.
     while IFS= read -r -d '' f; do
         mod_files+=("$f")
-    done < <(find "$ENABLED_DIR" -name "*.archive" -type f -print0 2>/dev/null | sort -z)
+    done < <(find "$ENABLED_DIR" -name "*.archive" -type f -print0 2>/dev/null | LC_ALL=C sort -z)
 fi
 
 if [ ${#mod_files[@]} -eq 0 ]; then

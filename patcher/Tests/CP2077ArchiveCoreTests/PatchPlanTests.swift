@@ -103,3 +103,31 @@ import Testing
     #expect(plan.officialWork.isEmpty)
     #expect(plan.newResources == [hash])
 }
+
+@Test func planResolvesConflictsInAsciiOrderNotLocaleOrder() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    let contested: UInt64 = 0x7777
+    try game.writeOfficial("basegame_1_stock.archive", records: [
+        TestRecord(hash: contested, payload: Data("stock".utf8))
+    ])
+
+    // These two names sort differently under ASCII than under en_US.UTF-8,
+    // which weights the '#' padding loosely: locale order puts ###-alpha
+    // first, ASCII order puts ####-bravo first. Windows resolves ASCII, so
+    // ####-bravo has to win. The earlier a_first/z_second fixture sorts the
+    // same way under both and so could not tell the two rules apart.
+    let asciiFirst = try game.writeMod("####-bravo.archive", records: [
+        TestRecord(hash: contested, payload: Data("bravo".utf8), sha1Fill: 2)
+    ])
+    let localeFirst = try game.writeMod("###-alpha.archive", records: [
+        TestRecord(hash: contested, payload: Data("alpha".utf8), sha1Fill: 1)
+    ])
+
+    let plan = try PatchPlanner.plan(mods: [localeFirst, asciiFirst], game: game.install)
+
+    #expect(plan.winners[contested]?.modArchive == asciiFirst)
+    #expect(plan.losers.count == 1)
+    #expect(plan.losers.first?.modArchive == localeFirst)
+}
