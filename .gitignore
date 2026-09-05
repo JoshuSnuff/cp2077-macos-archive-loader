@@ -19,3 +19,6 @@ gamefiles/r6/scripts/
 CLAUDE.md
 AGENTS.md
 docs/
+
+# Vendored patcher build output
+patcher/.build/
