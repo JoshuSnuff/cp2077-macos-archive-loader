@@ -210,3 +210,19 @@ extension Data {
         }
     }
 }
+
+/// Rewrites an archive's index in place, fixing the CRC afterwards.
+///
+/// Lets a test plant exactly the corruption it wants to prove `verify` catches,
+/// without which every check would pass vacuously.
+func rewriteIndex(of url: URL, _ mutate: (inout Data, RDARArchive) throws -> Void) throws {
+    let archive = try RDARArchive.read(url)
+    var index = archive.indexData
+    try mutate(&index, archive)
+    try index.writeUInt64LEForTest(Hashes.crc64(index.subdata(in: 16..<index.count)), at: 8)
+
+    let handle = try FileHandle(forUpdating: url)
+    defer { try? handle.close() }
+    try handle.seek(toOffset: archive.indexPosition)
+    try handle.write(contentsOf: index)
+}
