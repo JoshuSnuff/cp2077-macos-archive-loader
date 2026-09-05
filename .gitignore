@@ -1,5 +1,11 @@
 .DS_Store
-enabled/
-pristine/
-logs/
-build/
+enabled/*
+!enabled/.gitkeep
+pristine/content/*
+pristine/ep1/*
+!pristine/content/.gitkeep
+!pristine/ep1/.gitkeep
+logs/*
+!logs/.gitkeep
+build/*
+!build/.gitkeep
