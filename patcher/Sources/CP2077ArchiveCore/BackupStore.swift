@@ -20,9 +20,24 @@ public struct BackupStore: Sendable {
         let manager = FileManager.default
         try manager.createDirectory(at: game.backupDirectory, withIntermediateDirectories: true)
 
-        let id = Self.timestampID()
-        let dir = game.backupDirectory.appending(path: id, directoryHint: .isDirectory)
-        try manager.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Claim a directory rather than trusting the id to be unique. A grouped
+        // run backs up every target within the same second, and a random suffix
+        // collides: the second backup's manifest overwrote the first's, leaving
+        // an archive present on disk that no manifest could restore.
+        let stamp = Self.timestamp()
+        var id = stamp
+        var dir = game.backupDirectory.appending(path: id, directoryHint: .isDirectory)
+        var attempt = 0
+        while true {
+            do {
+                try manager.createDirectory(at: dir, withIntermediateDirectories: false)
+                break
+            } catch CocoaError.fileWriteFileExists {
+                attempt += 1
+                id = "\(stamp)-\(attempt)"
+                dir = game.backupDirectory.appending(path: id, directoryHint: .isDirectory)
+            }
+        }
 
         let archiveCopy = dir.appending(path: targetArchive.lastPathComponent)
         try manager.copyItem(at: targetArchive, to: archiveCopy)
@@ -68,12 +83,12 @@ public struct BackupStore: Sendable {
         return target
     }
 
-    private static func timestampID() -> String {
+    private static func timestamp() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
-        return formatter.string(from: Date()) + "-\(Int.random(in: 1000...9999))"
+        return formatter.string(from: Date())
     }
 }
 
