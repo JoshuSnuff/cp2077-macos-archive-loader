@@ -77,6 +77,7 @@ func writeTestArchive(to url: URL, records: [TestRecord]) throws {
     let dependencies = records.flatMap(\.dependencies)
 
     var index = Data(count: 28 + records.count * 56 + segmentCount * 16 + dependencies.count * 8)
+    try index.writeUInt32LEForTest(8, at: 0)
     try index.writeUInt32LEForTest(UInt32(index.count - 8), at: 4)
     try index.writeUInt32LEForTest(UInt32(records.count), at: 16)
     try index.writeUInt32LEForTest(UInt32(segmentCount), at: 20)

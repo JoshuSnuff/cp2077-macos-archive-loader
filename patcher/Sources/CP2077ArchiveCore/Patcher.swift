@@ -20,7 +20,7 @@ public struct ArchivePatchSummary: Sendable {
 /// What one run of a plan did to the install.
 public struct PlanPatchSummary: Sendable {
     public let archives: [ArchivePatchSummary]
-    public let looseArchives: [URL]
+    public let looseArchive: URL?
     public let newResourceCount: Int
     public let losers: [LosingRecord]
 
@@ -102,22 +102,11 @@ public struct RDARPatcher: Sendable {
             archives.append(try patch(targetURL: targetURL, writes: writes))
         }
 
-        // New resources cannot be merged into an official archive, so the mods
-        // that supply them ship whole as loose basegame_99_* archives. One copy
-        // per mod; consolidating them is deliberately out of scope.
-        var looseMods: [URL] = []
-        for hash in plan.newResources {
-            guard let winner = plan.winners[hash] else {
-                throw RDARArchiveError.planMissingWinner(hash)
-            }
-            if !looseMods.contains(winner.modArchive) {
-                looseMods.append(winner.modArchive)
-            }
-        }
+        let looseArchive = try writeLooseArchive(plan: plan, source: source)
 
         return PlanPatchSummary(
             archives: archives,
-            looseArchives: try looseMods.map { try installLooseArchive($0) },
+            looseArchive: looseArchive,
             newResourceCount: plan.newResources.count,
             losers: plan.losers
         )
@@ -167,7 +156,7 @@ public struct RDARPatcher: Sendable {
                     targetArchive: $0.targetArchive
                 )
             },
-            looseArchive: summary.looseArchives.first,
+            looseArchive: summary.looseArchive,
             missingRecordCount: summary.newResourceCount
         )
     }
@@ -202,23 +191,34 @@ public struct RDARPatcher: Sendable {
         return best.url
     }
 
-    private func installLooseArchive(_ sourceURL: URL) throws -> URL {
-        let manager = FileManager.default
-        try manager.createDirectory(at: game.managedLooseArchiveDirectory, withIntermediateDirectories: true)
+    private func writeLooseArchive(
+        plan: PatchPlan,
+        source: (URL) throws -> RDARArchive
+    ) throws -> URL? {
+        guard !plan.newResources.isEmpty else { return nil }
 
-        let baseName = sourceURL.deletingPathExtension().lastPathComponent
-            .lowercased()
-            .replacingOccurrences(of: #"[^a-z0-9_-]+"#, with: "_", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
-        let safeName = baseName.isEmpty ? "mod" : baseName
-        var candidate = game.managedLooseArchiveDirectory.appending(path: "basegame_99_\(safeName).archive")
-        var suffix = 2
-        while manager.fileExists(atPath: candidate.path) {
-            candidate = game.managedLooseArchiveDirectory.appending(path: "basegame_99_\(safeName)_\(suffix).archive")
-            suffix += 1
+        var winners: [WinningRecord] = []
+        var contributions: [URL: Int] = [:]
+        for hash in plan.newResources {
+            guard let winner = plan.winners[hash] else {
+                throw RDARArchiveError.planMissingWinner(hash)
+            }
+            winners.append(winner)
+            contributions[winner.modArchive, default: 0] += 1
         }
-        try manager.copyItem(at: sourceURL, to: candidate)
-        return candidate.normalizedFileURL
+
+        // Most-contributing mod wins; ASCII path order breaks ties so template
+        // selection is independent of dictionary iteration order.
+        let templateURL = contributions.keys.sorted {
+            let lhsCount = contributions[$0] ?? 0
+            let rhsCount = contributions[$1] ?? 0
+            return lhsCount == rhsCount ? $0.path < $1.path : lhsCount > rhsCount
+        }[0]
+        return try RDARWriter.write(
+            winners: winners,
+            headerTemplate: source(templateURL),
+            to: game.managedLooseArchive
+        )
     }
 
     private func patchSummary(targetURL: URL, writes: [PlannedWrite]) throws -> PatchSummary {

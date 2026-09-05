@@ -233,7 +233,7 @@ import Testing
     #expect(patched.storedCRC == patched.computedCRC)
 }
 
-@Test func patchShipsNewResourcesAsLooseArchives() throws {
+@Test func patchShipsNewResourcesInTheConsolidatedLooseArchive() throws {
     let game = try TestGame()
     defer { game.cleanUp() }
 
@@ -248,7 +248,10 @@ import Testing
     let plan = try PatchPlanner.plan(mods: [mod], game: game.install)
     let summary = try RDARPatcher(game: game.install).apply(plan: plan)
 
-    #expect(summary.looseArchives.count == 1)
-    #expect(summary.looseArchives.first?.lastPathComponent == "basegame_99_mod.archive")
-    #expect(FileManager.default.fileExists(atPath: summary.looseArchives[0].path))
+    #expect(summary.looseArchive?.lastPathComponent == "basegame_99_cp2077_runtime.archive")
+    #expect(FileManager.default.fileExists(atPath: summary.looseArchive!.path))
+
+    let loose = try RDARArchive.read(summary.looseArchive!)
+    #expect(loose.records.map(\.nameHash) == [0x9999])
+    #expect(try compressedRecordData(loose.records[0], in: loose) == Data("new".utf8))
 }

@@ -24,6 +24,88 @@ import Testing
     #expect(report.unpatchedRecordCount == 0)
 }
 
+@Test func verifyChecksTheConsolidatedArchiveAgainstNewResources() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    let mod = try game.writeMod("mod.archive", records: [
+        TestRecord(
+            hash: 0x9999,
+            payload: Data("new".utf8),
+            timestamp: 9,
+            inlineBufferSegments: 2,
+            sha1Fill: 9,
+            dependencies: [0xbeef]
+        )
+    ])
+    let plan = try PatchPlanner.plan(mods: [mod], game: game.install)
+    _ = try RDARPatcher(game: game.install).apply(plan: plan)
+
+    let report = try PlanVerifier.verify(plan: plan, game: game.install)
+
+    #expect(report.isClean)
+    #expect(report.matchingRecordCount == 1)
+    #expect(report.archives.contains { $0.archive == game.install.managedLooseArchive.normalizedFileURL })
+}
+
+@Test func verifyDetectsAMissingConsolidatedArchive() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    let mod = try game.writeMod("mod.archive", records: [
+        TestRecord(hash: 0x9999, payload: Data("new".utf8))
+    ])
+    let plan = try PatchPlanner.plan(mods: [mod], game: game.install)
+
+    let report = try PlanVerifier.verify(plan: plan, game: game.install)
+
+    #expect(!report.isClean)
+    #expect(report.differingRecordCount == 1)
+    #expect(report.archives.flatMap(\.issues).contains { $0.contains("absent") })
+}
+
+@Test func verifyDetectsDuplicateNewResourcesInTheConsolidatedArchive() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    let modURL = try game.writeMod("duplicate.archive", records: [
+        TestRecord(hash: 0x9999, payload: Data("first".utf8)),
+        TestRecord(hash: 0x9999, payload: Data("second".utf8))
+    ])
+    let plan = try PatchPlanner.plan(mods: [modURL], game: game.install)
+    try RDARWriter.write(archive: RDARArchive.read(modURL), to: game.install.managedLooseArchive)
+
+    let report = try PlanVerifier.verify(plan: plan, game: game.install)
+
+    #expect(!report.isClean)
+    #expect(report.archives.flatMap(\.issues).contains { $0.contains("occurs 2 times") })
+}
+
+@Test func verifyRejectsAnOfficiallyOwnedRecordInTheConsolidatedArchive() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    let officialHash: UInt64 = 0x1111
+    try game.writeOfficial("basegame_1_stock.archive", records: [
+        TestRecord(hash: officialHash, payload: Data("stock".utf8))
+    ])
+    let mod = try game.writeMod("mod.archive", records: [
+        TestRecord(hash: 0x9999, payload: Data("new".utf8))
+    ])
+    let plan = try PatchPlanner.plan(mods: [mod], game: game.install)
+    _ = try RDARPatcher(game: game.install).apply(plan: plan)
+    try rewriteIndex(of: game.install.managedLooseArchive) { index, archive in
+        try index.writeUInt64LEForTest(officialHash, at: archive.recordsOffset)
+    }
+
+    let report = try PlanVerifier.verify(plan: plan, game: game.install)
+    let issues = report.archives.flatMap(\.issues)
+
+    #expect(!report.isClean)
+    #expect(issues.contains { $0.contains("owned by an official archive") })
+    #expect(issues.contains { $0.contains("not a planned new resource") })
+}
+
 @Test func verifyReportsAnUnpatchedStockRecordWhenThePatchNeverRan() throws {
     let game = try TestGame()
     defer { game.cleanUp() }

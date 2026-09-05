@@ -164,7 +164,7 @@ struct CP2077PatcherCLI {
                 )
                 print("    backup=\(archive.backupDirectory.path)")
             }
-            for loose in summary.looseArchives {
+            if let loose = summary.looseArchive {
                 print("  looseArchive=\(loose.path)")
             }
             print("patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")

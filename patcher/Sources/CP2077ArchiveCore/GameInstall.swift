@@ -27,6 +27,10 @@ public struct GameInstall: Sendable {
         macContentArchiveDirectory
     }
 
+    public var managedLooseArchive: URL {
+        managedLooseArchiveDirectory.appending(path: "basegame_99_cp2077_runtime.archive")
+    }
+
     public func macArchives() throws -> [URL] {
         let manager = FileManager.default
         let dirs = [macContentArchiveDirectory, macEP1ArchiveDirectory]

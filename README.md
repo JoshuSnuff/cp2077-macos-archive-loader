@@ -31,9 +31,9 @@ replacement and cannot become one without reviving RED4ext's native hooking.
 ## How it works
 
 The patcher's `hybrid` strategy **rewrites the shipped official archives in
-place** in `$CP2077_GAME_DIR/archive/Mac/{content,ep1}/`, and spills resources
-that don't exist in any official archive into loose `basegame_99_*.archive` files
-alongside them.
+place** in `$CP2077_GAME_DIR/archive/Mac/{content,ep1}/`, and writes resources
+that don't exist in any official archive into one loose archive alongside them:
+`archive/Mac/content/basegame_99_cp2077_runtime.archive`.
 
 A patched install is a destroyed install until something puts the originals back.
 Everything else follows from that:
@@ -126,7 +126,7 @@ loader works without a Swift toolchain:
 ```bash
 swift build -c release --package-path patcher
 cp patcher/.build/release/cp2077-patcher .
-swift test --package-path patcher      # 32 tests, no game install needed
+swift test --package-path patcher      # 41 tests, no game install needed
 ```
 
 The package originates from
@@ -209,17 +209,24 @@ A full injection now plans 20,295 override records across 47 archives, writes
 20,370 (the extra 75 being duplicate-owner copies), reports the 3 conflicts it
 resolved, and `verify --mods` reports every record as matching the plan.
 
-### Remaining defects
+### Loose archive consolidation
 
-`basegame_99_*` loose archives are whole-mod copies, so they carry override
-records that can never be read. Roughly 36% of records across the loose archives
-are the only ones doing anything. This wastes space but is not incorrect.
+New resources are emitted once per injection into the fixed
+`basegame_99_cp2077_runtime.archive` name. The archive contains only the winning
+records in `PatchPlan.newResources`, sorted by hash; override records are not
+copied into it. New-resource conflicts therefore use the same ASCII-order,
+first-wins rule as official overrides.
+
+The RDAR writer copies record fields, dependency hashes, and compressed segment
+payloads from their source mods without re-encoding them. It uses the header of
+the mod contributing the most new records as its template, rebuilds the three
+index tables and CRC, and aligns the index and file size to 4096 bytes. `verify`
+checks the consolidated archive against the plan and rejects missing, duplicate,
+unexpected, or officially owned records as well as structural damage.
 
 ## Roadmap
 
-1. **Consolidate loose archives.** Emit one deterministic archive containing only
-   genuinely new resources, instead of a whole-mod copy per contributing mod.
-2. **Transactional backups.** One manifest per run rather than per archive, with
+1. **Transactional backups.** One manifest per run rather than per archive, with
    pruning.
 
 Not planned: reviving RED4ext native hooking would need a real address database

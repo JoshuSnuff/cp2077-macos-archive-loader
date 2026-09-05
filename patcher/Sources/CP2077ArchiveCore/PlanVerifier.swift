@@ -57,15 +57,108 @@ public struct VerificationReport: Sendable {
 /// is the only way those are detectable at all.
 public enum PlanVerifier {
     public static func verify(plan: PatchPlan, game: GameInstall) throws -> VerificationReport {
+        let officialURLs = Set(try game.officialMacArchives())
+        var officialHashes = Set<UInt64>()
         var archives: [ArchiveVerification] = []
+        let looseURL = game.managedLooseArchive.normalizedFileURL
+        var foundLooseArchive = false
+        var deferredLooseArchive: RDARArchive?
         for archiveURL in try game.macArchives() {
-            archives.append(try verify(plan: plan, archiveURL: archiveURL))
+            if archiveURL == looseURL {
+                foundLooseArchive = true
+                deferredLooseArchive = try RDARArchive.read(archiveURL)
+            } else {
+                let archive = try RDARArchive.read(archiveURL)
+                if officialURLs.contains(archiveURL) {
+                    officialHashes.formUnion(archive.records.map(\.nameHash))
+                }
+                var verification = try verify(plan: plan, archive: archive)
+                if archiveURL.lastPathComponent.hasPrefix("basegame_99_") {
+                    verification = ArchiveVerification(
+                        archive: verification.archive,
+                        issues: verification.issues + [
+                            "unexpected loose archive; the plan uses only \(looseURL.lastPathComponent)"
+                        ],
+                        records: verification.records
+                    )
+                }
+                archives.append(verification)
+            }
+        }
+
+        if let loose = deferredLooseArchive {
+            archives.append(try verifyLoose(plan: plan, archive: loose, officialHashes: officialHashes))
+        }
+
+        if !plan.newResources.isEmpty && !foundLooseArchive {
+            archives.append(ArchiveVerification(
+                archive: looseURL,
+                issues: ["planned consolidated loose archive is absent"],
+                records: plan.newResources.sorted().compactMap { hash in
+                    guard plan.winners[hash] != nil else { return nil }
+                    return RecordVerification(
+                        hash: hash,
+                        verdict: .differsFromPlan,
+                        issues: ["record is absent from \(looseURL.lastPathComponent)"]
+                    )
+                }
+            ))
         }
         return VerificationReport(archives: archives)
     }
 
     static func verify(plan: PatchPlan, archiveURL: URL) throws -> ArchiveVerification {
-        let archive = try RDARArchive.read(archiveURL)
+        try verify(plan: plan, archive: RDARArchive.read(archiveURL))
+    }
+
+    private static func verify(plan: PatchPlan, archive: RDARArchive) throws -> ArchiveVerification {
+        let issues = try structuralIssues(in: archive)
+
+        let hashes = plan.officialWork[archive.url.normalizedFileURL] ?? []
+        var records: [RecordVerification] = []
+        for hash in hashes {
+            guard let winner = plan.winners[hash] else { continue }
+            records.append(verify(winner: winner, in: archive))
+        }
+
+        return ArchiveVerification(archive: archive.url, issues: issues, records: records)
+    }
+
+    private static func verifyLoose(
+        plan: PatchPlan,
+        archive: RDARArchive,
+        officialHashes: Set<UInt64>
+    ) throws -> ArchiveVerification {
+        var issues = try structuralIssues(in: archive)
+        let expectedHashes = Set(plan.newResources)
+        var counts: [UInt64: Int] = [:]
+        for record in archive.records {
+            counts[record.nameHash, default: 0] += 1
+            if officialHashes.contains(record.nameHash) {
+                issues.append("record \(Hashes.hex64(record.nameHash)) is owned by an official archive")
+            }
+            if !expectedHashes.contains(record.nameHash) {
+                issues.append("unexpected record \(Hashes.hex64(record.nameHash)) is not a planned new resource")
+            }
+        }
+
+        var records: [RecordVerification] = []
+        for hash in plan.newResources.sorted() {
+            let count = counts[hash] ?? 0
+            if count != 1 {
+                issues.append("planned new resource \(Hashes.hex64(hash)) occurs \(count) times; expected exactly once")
+            }
+            guard let winner = plan.winners[hash] else { continue }
+            records.append(verify(winner: winner, in: archive))
+        }
+
+        if plan.newResources.isEmpty {
+            issues.append("consolidated loose archive exists but the plan has no new resources")
+        }
+        return ArchiveVerification(archive: archive.url, issues: issues, records: records)
+    }
+
+    private static func structuralIssues(in archive: RDARArchive) throws -> [String] {
         var issues: [String] = []
 
         if archive.storedCRC != archive.computedCRC {
@@ -76,6 +169,22 @@ public enum PlanVerifier {
         }
         if archive.fileSize % 4096 != 0 {
             issues.append("file size \(archive.fileSize) is not 4096-aligned")
+        }
+        if try archive.indexData.uint32LE(at: 0) != 8 {
+            issues.append("index header offset 0 is not 8")
+        }
+        if try archive.indexData.uint32LE(at: 4) != archive.indexSize - 8 {
+            issues.append("index header size does not equal indexSize - 8")
+        }
+
+        let actualFileSize = try archive.url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        if actualFileSize.map(UInt64.init) != archive.fileSize {
+            issues.append("header file size \(archive.fileSize) does not match the file on disk")
+        }
+        if archive.indexPosition > archive.fileSize
+            || UInt64(archive.indexSize) > archive.fileSize - archive.indexPosition
+        {
+            issues.append("index runs past the end of the file")
         }
 
         // Header counts must agree with the tables they describe, or an index
@@ -91,18 +200,23 @@ public enum PlanVerifier {
                     + " dependencyCount=\(archive.dependencyCount))"
             )
         }
-        if archive.records.map(\.dependenciesEnd).max() ?? 0 > archive.dependencyCount {
-            issues.append("a record's dependency range runs past dependencyCount \(archive.dependencyCount)")
-        }
 
-        let hashes = plan.officialWork[archiveURL.normalizedFileURL] ?? []
-        var records: [RecordVerification] = []
-        for hash in hashes {
-            guard let winner = plan.winners[hash] else { continue }
-            records.append(verify(winner: winner, in: archive))
+        for record in archive.records {
+            if record.segmentsStart > record.segmentsEnd || record.segmentsEnd > archive.fileSegmentCount {
+                issues.append("record \(Hashes.hex64(record.nameHash)) has a segment range outside the segment table")
+            }
+            if record.dependenciesStart > record.dependenciesEnd || record.dependenciesEnd > archive.dependencyCount {
+                issues.append("record \(Hashes.hex64(record.nameHash)) has a dependency range outside dependencyCount")
+            }
         }
-
-        return ArchiveVerification(archive: archiveURL, issues: issues, records: records)
+        for segment in archive.segments {
+            if segment.offset > archive.fileSize
+                || UInt64(segment.compressedSize) > archive.fileSize - segment.offset
+            {
+                issues.append("segment \(segment.index) runs past the end of the file")
+            }
+        }
+        return issues
     }
 
     private static func verify(winner: WinningRecord, in archive: RDARArchive) -> RecordVerification {
@@ -169,7 +283,9 @@ public enum PlanVerifier {
             } else {
                 for i in Int(record.segmentsStart)..<Int(record.segmentsEnd) {
                     let segment = archive.segments[i]
-                    if segment.offset + UInt64(segment.compressedSize) > archive.fileSize {
+                    if segment.offset > archive.fileSize
+                        || UInt64(segment.compressedSize) > archive.fileSize - segment.offset
+                    {
                         issues.append("segment \(i) runs past the end of the file")
                     }
                 }
