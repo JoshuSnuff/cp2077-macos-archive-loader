@@ -1,69 +1,226 @@
 # cp2077-macos-archiveloader
 
-Archive mod loader for Cyberpunk 2077 on macOS (Apple Silicon). Injects `.archive` mods into the game at launch and restores vanilla archives on exit, using APFS clonefile (`cp -c`) for instant, space-efficient copies.
+Archive mod loader for Cyberpunk 2077 on macOS (Apple Silicon).
 
-> **Note:** Tested on the GOG version only. Other storefronts may work if the archive layout under `archive/Mac/` is the same.
+Cyberpunk 2077 has no mod-loading hook on macOS. This repo works around that with
+three Bash scripts and a prebuilt Swift binary that rewrites the game's own
+archives before launch and puts the originals back afterwards.
+
+> Tested against the GOG build, game version 2.3.1, on Apple Silicon. Other
+> storefronts may work if the layout under `archive/Mac/` matches.
+
+## Status
+
+Last verified 2026-09-05 against game 2.3.1 with 33 mods enabled.
+
+| Capability | State |
+|---|---|
+| `.archive` mods that add new resources | Working |
+| `.archive` mods that override stock resources | Working, with known metadata defects (below) |
+| REDscript mods (`r6/scripts`) | Working — 59 `.reds` files compiling |
+| Input remapping (`inputloader.pl`) | Working |
+| Restore-to-vanilla on every exit path | Working — verified against clean exit, non-zero exit, SIGSEGV, and Ctrl-C |
+| Crash on quit | Fixed 2026-09-05 (see RED4ext below) |
+| RED4ext native plugins | **Not working** — no plugin can load |
+| ArchiveXL / TweakXL / CET | **Not supported** — blocked on the above |
+| `.archive.xl` sidecars | **Not supported** |
+
+This is an archive-only mod loader plus REDscript. It is not an ArchiveXL
+replacement and cannot become one without reviving RED4ext's native hooking.
+
+## How it works
+
+The patcher's `hybrid` strategy **rewrites the shipped official archives in
+place** in `$CP2077_GAME_DIR/archive/Mac/{content,ep1}/`, and spills resources
+that don't exist in any official archive into loose `basegame_99_*.archive` files
+alongside them.
+
+A patched install is a destroyed install until something puts the originals back.
+Everything else follows from that:
+
+- **`pristine/{content,ep1}/` is the only copy of vanilla.** 57 archives, 32 in
+  `content/` and 25 in `ep1/`. It is gitignored and **no script ever writes to
+  it** — populate it by hand from a clean install before first use. Losing it
+  means reinstalling the game.
+- **Every injection restores first.** `inject_archives.sh` calls
+  `restore_pristine` before patching, so a crashed prior session can't stack a
+  second patch onto already-patched archives, and again if the patcher fails, so
+  the game still launches vanilla rather than broken.
+- **Restore runs from an `EXIT` trap**, not a trailing line, so a crash or Ctrl-C
+  can't leave the install patched.
+- **`cp -c` (APFS clonefile) everywhere.** Restoring all 57 archives is
+  near-instant and costs no disk, which is what makes restore-before-every-run
+  affordable.
+
+### Why overrides require rewriting official archives
+
+Two probe launches on 2026-09-05 established the platform's rules. A pure-override
+mod was installed as a single loose archive with all official archives left
+pristine:
+
+| Probe filename | Sorts | Override applied? |
+|---|---|---|
+| `0_probe_sasha.archive` | before all official archives | No |
+| `basegame_99_probe_sasha.archive` | after all official archives | No |
+
+Meanwhile new-content mods delivered through `basegame_99_*` load fine.
+
+**A loose archive on macOS can add new resources but can never override a
+resource an official archive already owns, at any sort position.** Windows'
+`archive/pc/mod/` scope has no macOS equivalent. Rewriting official archives is
+the only override mechanism available, so parity with Windows means matching its
+observable outcome, not its mechanism.
 
 ## Setup
 
-1. Clone this repo somewhere convenient.
-2. Set the `CP2077_GAME_DIR` environment variable to your Cyberpunk 2077 install directory:
+1. Clone this repo.
+2. Point `CP2077_GAME_DIR` at your install:
    ```bash
    export CP2077_GAME_DIR="/path/to/Cyberpunk 2077"
    ```
-3. Drop your `.archive` mod files into `enabled/`.
+   All three scripts exit 1 without it.
+3. Populate `pristine/content/` and `pristine/ep1/` by hand from a **clean**
+   install. Nothing does this for you and nothing will warn you.
+4. Drop `.archive` mods into `enabled/`.
+
+Load order is the `sort -z` order of `enabled/`, which is why real mod names carry
+`#`, `0_`, or `x_` prefixes to force position.
 
 ## Usage
 
-**Launch the game with mods:**
-
 ```bash
-./launch_modded.sh
+./launch_modded.sh      # inject → scc → inputloader → RED4ext → game → restore
+./inject_archives.sh    # inject only (safe standalone, for testing)
+./restore_archives.sh   # restore vanilla only (manual recovery after a crash)
 ```
 
-This is the main entry point. It runs the full modded launch sequence:
+`launch_modded.sh` suffixes each step with `|| true` on purpose: a failed
+REDscript compile or missing inputloader must not stop the game launching. It
+deliberately does not `exec`, because it has to regain control to restore.
 
-1. Restores vanilla archives from `pristine/` via APFS clone
-2. Collects `.archive` mods from `enabled/` and clones them into `archive/Mac/mod/`
-3. Runs `cp2077-patcher patch` to merge mods into the game's resource index
-4. Runs `cp2077-patcher verify` to confirm archive integrity
-5. Compiles REDscript (`engine/tools/scc`)
-6. Processes input mappings (`engine/tools/inputloader.pl`)
-7. Injects `RED4ext.dylib` (and `FridaGadget.dylib` if present) via `DYLD_INSERT_LIBRARIES`
-8. Launches the game
-9. On exit, restores vanilla archives and cleans up patcher artifacts
+If a restore is ever missed anyway (`SIGKILL`, power loss), `./restore_archives.sh`
+is the manual recovery, and the next `inject_archives.sh` restores first
+regardless.
 
-**Inject mods only (no launch):**
+Every run writes a timestamped log to `logs/`; override with `INJECT_LOG_FILE` /
+`RESTORE_LOG_FILE`.
 
-```bash
-./inject_archives.sh
+## The patcher
+
+`cp2077-patcher` is an arm64 Mach-O built from a separate Swift package,
+`CP2077ArchiveCore`, kept as a sibling directory of this repo:
+
+```
+Games/Heroic/
+├── CP2077 Archive Runtime/     # this repo
+├── CP2077 Archive Patcher/     # Swift package — patcher source
+└── Cyberpunk 2077/             # game install
 ```
 
-**Restore vanilla only:**
-
 ```bash
-./restore_archives.sh
+cd "../CP2077 Archive Patcher" && swift build -c release
+cp .build/release/cp2077-patcher "../CP2077 Archive Runtime/"
 ```
 
-Reverts all archives to pristine state, removes patcher-generated `basegame_99_*` files, the `mod/` staging area, and `_cp2077_mac_patcher` backups.
+> The committed binary is currently an unoptimized **debug** build. Rebuild with
+> `-c release` when next touched.
 
-## Directory layout
+CLI, invoked by `inject_archives.sh` but useful directly when debugging one mod:
+
+```bash
+./cp2077-patcher scan MOD.archive [...]
+./cp2077-patcher detect
+./cp2077-patcher verify --game "$CP2077_GAME_DIR"
+./cp2077-patcher patch --game "$CP2077_GAME_DIR" [--strategy hybrid|aggressive] [--target T.archive] --mods MOD.archive [...]
+./cp2077-patcher restore --game "$CP2077_GAME_DIR" [--backup BACKUP_DIR | --latest]
+```
+
+## RED4ext and REDscript
+
+REDscript works normally. RED4ext loads, but **its native hooking is dead**: all
+seven function hashes it needs are absent from `cyberpunk2077_addresses.json`,
+every `DetourAttach` fails with a null pointer, and `red4ext/plugins/` is empty.
+No native plugin — ArchiveXL, TweakXL, CET — can load.
+
+What does work is a parallel Frida hook layer (`red4ext/red4ext_hooks.js`, 8 of 14
+hooks active). Its `ScriptValidator_Validate` and `CBaseEngine_LoadScripts` hooks
+are what stop the game rejecting modified scripts, so REDscript mods depend on
+RED4ext being injected even though RED4ext's own hooking is broken. Removing it
+would silently kill every `.reds` mod.
+
+### Quit crash (fixed)
+
+Every quit used to end in `SIGSEGV`. Cause: the failed `DetourAttach` calls leave
+null entries in RED4ext's `DetourTransaction`, and at process exit
+`RED4extShutdown()` → `App::Destruct()` walks them and dereferences null at
+`0x38`. It fired after the game had fully shut down, so it never risked saves —
+but it produced a crash report every session.
+
+Fixed by a Frida guard that replaces `App::Destruct` with a no-op, in
+`red4ext/red4ext_hooks.js`. Verified: exit code 0, no crash report, RED4ext log
+still completes.
+
+> This fix currently lives **only in the game directory** and is not tracked here.
+> A reinstall reverts it. See the vendoring spec below.
+
+## Known defects
+
+Found by audit and independently verified against the 33 enabled mods. All are
+latent — no in-game symptom has been observed.
+
+| Defect | Scale |
+|---|---|
+| Replaced records keep the **stock** record's metadata while carrying the mod's payload | 20,298 override records |
+| — differing inline-buffer counts | 336 |
+| — mod dependencies dropped / stale stock dependencies kept | 23 / 220 |
+| — stale timestamps | 20,298 |
+| Conflict priority reversed: last mod patched wins, Windows is first-wins | currently 2 overlaps, identical SHA-1, so no active effect |
+| Only the lexicographically first official owner of a duplicated hash is patched | 75 records live in more than one stock archive |
+| `verify` checks only index CRC and alignment — cannot detect any of the above | — |
+
+Also: `basegame_99_*` loose archives are whole-mod copies, so they carry override
+records that can never be read. Roughly 36% of records across the loose archives
+are the only ones doing anything.
+
+## Roadmap
+
+Designs in `docs/superpowers/specs/`:
+
+1. [`archive-patcher-parity`](docs/superpowers/specs/2026-09-05-archive-patcher-parity-design.md)
+   — correct record transplant, global first-wins winner resolution, patch every
+   owner, plan-based verification.
+2. [`vendor-red4ext-runtime-files`](docs/superpowers/specs/2026-09-05-vendor-red4ext-runtime-files-design.md)
+   — track the hand-written game-directory files so a reinstall stops reverting
+   them.
+3. [`loose-archive-consolidation`](docs/superpowers/specs/2026-09-05-loose-archive-consolidation-design.md)
+   — emit one deterministic loose archive containing only genuinely new
+   resources. Depends on 1.
+
+Not planned: reviving RED4ext native hooking would need a real address database
+built for the macOS 2.3.1 binary. That is the only route to ArchiveXL, TweakXL,
+and CET, and it is a substantial reverse-engineering effort with uncertain payoff.
+
+## Layout
 
 ```
 .
-├── cp2077-patcher          # arm64 macOS patcher binary
+├── cp2077-patcher          # arm64 patcher binary (build artifact)
 ├── launch_modded.sh        # full modded launch sequence
 ├── inject_archives.sh      # inject archive mods
 ├── restore_archives.sh     # restore vanilla archives
-├── enabled/                # your .archive mod files (not tracked)
-├── pristine/               # vanilla archive baselines (not tracked)
-│   ├── content/
-│   └── ep1/
-└── logs/                   # injection/restoration logs (not tracked)
+├── docs/superpowers/specs/ # design documents
+├── enabled/                # your .archive mods (contents ignored)
+├── pristine/               # vanilla baselines — irreplaceable (contents ignored)
+│   ├── content/            #   32 archives
+│   └── ep1/                #   25 archives
+└── logs/                   # run logs (contents ignored)
 ```
+
+Do not commit archives or logs.
 
 ## Requirements
 
 - macOS on Apple Silicon (arm64)
-- APFS filesystem (default on modern macOS)
-- Cyberpunk 2077 (tested on GOG)
+- APFS (for `cp -c` clonefile)
+- Cyberpunk 2077 2.3.1, GOG build
+- Swift 6.x and Xcode, only to rebuild the patcher

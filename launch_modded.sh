@@ -27,11 +27,20 @@ INJECT_LIBS="$GAME_DIR/red4ext/RED4ext.dylib"
 export DYLD_INSERT_LIBRARIES="$INJECT_LIBS"
 export DYLD_FORCE_FLAT_NAMESPACE=1
 
-# 5. Launch game (no exec — need post-exit cleanup)
-"$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" "$@"
-game_exit=$?
+# 5. Restore pristine archives on every exit path — clean quit, crash, or Ctrl-C.
+# A patched install stays broken until this runs, so it must not be skippable.
+restored=0
+restore_on_exit() {
+    [ "$restored" -eq 1 ] && return
+    restored=1
+    "$RUNTIME_DIR/restore_archives.sh" || true
+}
+trap restore_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# 6. Post-exit: restore pristine archives
-"$RUNTIME_DIR/restore_archives.sh" || true
+# 6. Launch game (no exec — need post-exit cleanup)
+game_exit=0
+"$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" "$@" || game_exit=$?
 
 exit $game_exit
