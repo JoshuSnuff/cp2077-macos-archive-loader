@@ -11,7 +11,7 @@ public enum ModScanner {
         let archive = try RDARArchive.read(url)
         var notes: [String] = []
         if archive.dependencyCount > 0 {
-            notes.append("archive index has dependency entries; insertion of dependency-bearing new records is not supported yet")
+            notes.append("archive index has \(archive.dependencyCount) dependency entries; these are carried across when the record is patched")
         }
         if archive.records.isEmpty {
             notes.append("archive has no records")

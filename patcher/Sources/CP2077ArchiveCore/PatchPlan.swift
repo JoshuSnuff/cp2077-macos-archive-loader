@@ -29,6 +29,18 @@ public struct PatchPlan: Sendable {
     /// Records dropped because an earlier mod already claimed the hash.
     public let losers: [LosingRecord]
 
+    public init(
+        winners: [UInt64: WinningRecord],
+        officialWork: [URL: [UInt64]],
+        newResources: [UInt64],
+        losers: [LosingRecord]
+    ) {
+        self.winners = winners
+        self.officialWork = officialWork
+        self.newResources = newResources
+        self.losers = losers
+    }
+
     /// Official archives to rewrite, in a stable order.
     public var targets: [URL] {
         officialWork.keys.sorted { $0.path < $1.path }

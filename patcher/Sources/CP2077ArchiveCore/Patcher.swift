@@ -8,6 +8,27 @@ public struct PatchSummary: Sendable {
     public let targetArchive: URL
 }
 
+/// What one run of a plan did to one official archive.
+public struct ArchivePatchSummary: Sendable {
+    public let targetArchive: URL
+    public let backupDirectory: URL
+    public let patchedCount: Int
+    public let insertedCount: Int
+    public let replacedCount: Int
+}
+
+/// What one run of a plan did to the install.
+public struct PlanPatchSummary: Sendable {
+    public let archives: [ArchivePatchSummary]
+    public let looseArchives: [URL]
+    public let newResourceCount: Int
+    public let losers: [LosingRecord]
+
+    public var overrideRecordCount: Int {
+        archives.reduce(0) { $0 + $1.patchedCount }
+    }
+}
+
 public struct HybridPatchSummary: Sendable {
     public let sourceArchive: URL
     public let officialPatches: [PatchSummary]
@@ -47,72 +68,119 @@ public struct RDARPatcher: Sendable {
         self.game = game
     }
 
+    // MARK: - Plan-driven patching
+
+    /// Applies a plan to the install.
+    ///
+    /// Work is grouped by target archive, so each official archive is backed up
+    /// and rewritten exactly once per run no matter how many mods contribute
+    /// records to it. Patching per mod is what produced hundreds of backup
+    /// directories for a single 33-mod injection.
+    public func apply(plan: PatchPlan) throws -> PlanPatchSummary {
+        var sourceCache: [URL: RDARArchive] = [:]
+        func source(_ url: URL) throws -> RDARArchive {
+            if let cached = sourceCache[url] { return cached }
+            let archive = try RDARArchive.read(url)
+            sourceCache[url] = archive
+            return archive
+        }
+
+        var archives: [ArchivePatchSummary] = []
+        for targetURL in plan.targets {
+            let hashes = plan.officialWork[targetURL] ?? []
+            let writes = try hashes.map { hash -> PlannedWrite in
+                guard let winner = plan.winners[hash] else {
+                    throw RDARArchiveError.planMissingWinner(hash)
+                }
+                return PlannedWrite(
+                    hash: hash,
+                    source: try source(winner.modArchive),
+                    record: winner.record,
+                    dependencies: winner.dependencies
+                )
+            }
+            archives.append(try patch(targetURL: targetURL, writes: writes))
+        }
+
+        // New resources cannot be merged into an official archive, so the mods
+        // that supply them ship whole as loose basegame_99_* archives. One copy
+        // per mod; consolidating them is deliberately out of scope.
+        var looseMods: [URL] = []
+        for hash in plan.newResources {
+            guard let winner = plan.winners[hash] else {
+                throw RDARArchiveError.planMissingWinner(hash)
+            }
+            if !looseMods.contains(winner.modArchive) {
+                looseMods.append(winner.modArchive)
+            }
+        }
+
+        return PlanPatchSummary(
+            archives: archives,
+            looseArchives: try looseMods.map { try installLooseArchive($0) },
+            newResourceCount: plan.newResources.count,
+            losers: plan.losers
+        )
+    }
+
+    // MARK: - Single-source entry points
+
     public func patchAll(sourceArchive sourceURL: URL, targetArchive targetURL: URL) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
-        return try patch(source: source, targetURL: targetURL, requests: source.records.map {
-            PatchRequest(label: "hash:\(String($0.nameHash, radix: 16).leftPadded(to: 16, with: "0"))", hash: $0.nameHash, sourceRecord: $0)
+        return try patchSummary(targetURL: targetURL, writes: try source.records.map {
+            try PlannedWrite(hash: $0.nameHash, source: source, record: $0, dependencies: source.dependencies(for: $0))
         })
     }
 
     public func patchPaths(sourceArchive sourceURL: URL, targetArchive targetURL: URL, paths: [String]) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
-        let requests = try paths.map { path in
+        return try patchSummary(targetURL: targetURL, writes: try paths.map { path in
             let hash = Hashes.fnv1a64Path(path)
             guard let record = source.record(hash: hash) else {
                 throw RDARArchiveError.noTargetArchive(sourceURL)
             }
-            return PatchRequest(label: path, hash: hash, sourceRecord: record)
-        }
-        return try patch(source: source, targetURL: targetURL, requests: requests)
+            return PlannedWrite(hash: hash, source: source, record: record, dependencies: try source.dependencies(for: record))
+        })
     }
 
     public func patchHashes(sourceArchive sourceURL: URL, targetArchive targetURL: URL, hashes: [UInt64]) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
-        let requests = try hashes.map { hash in
+        return try patchSummary(targetURL: targetURL, writes: try hashes.map { hash in
             guard let record = source.record(hash: hash) else {
                 throw RDARArchiveError.noTargetArchive(sourceURL)
             }
-            return PatchRequest(label: "hash:\(String(hash, radix: 16).leftPadded(to: 16, with: "0"))", hash: hash, sourceRecord: record)
-        }
-        return try patch(source: source, targetURL: targetURL, requests: requests)
+            return PlannedWrite(hash: hash, source: source, record: record, dependencies: try source.dependencies(for: record))
+        })
     }
 
     public func patchHybrid(sourceArchive sourceURL: URL) throws -> HybridPatchSummary {
-        let (source, ownerByHash) = try resolveOwners(sourceArchive: sourceURL)
-        let existing = source.records.filter { ownerByHash[$0.nameHash] != nil }
-        let missing = source.records.filter { ownerByHash[$0.nameHash] == nil }
-
-        var grouped: [URL: [UInt64]] = [:]
-        for record in existing {
-            if let owner = ownerByHash[record.nameHash] {
-                grouped[owner, default: []].append(record.nameHash)
-            }
-        }
-
-        var officialPatches: [PatchSummary] = []
-        for (targetURL, hashes) in grouped.sorted(by: { $0.key.path < $1.key.path }) {
-            officialPatches.append(try patchHashes(sourceArchive: sourceURL, targetArchive: targetURL, hashes: hashes))
-        }
-
-        let looseArchive = missing.isEmpty ? nil : try installLooseArchive(sourceURL)
-
+        let plan = try PatchPlanner.plan(mods: [sourceURL], game: game)
+        let summary = try apply(plan: plan)
         return HybridPatchSummary(
             sourceArchive: sourceURL,
-            officialPatches: officialPatches,
-            looseArchive: looseArchive,
-            missingRecordCount: missing.count
+            officialPatches: summary.archives.map {
+                PatchSummary(
+                    backupDirectory: $0.backupDirectory,
+                    patchedCount: $0.patchedCount,
+                    insertedCount: $0.insertedCount,
+                    replacedCount: $0.replacedCount,
+                    targetArchive: $0.targetArchive
+                )
+            },
+            looseArchive: summary.looseArchives.first,
+            missingRecordCount: summary.newResourceCount
         )
     }
 
     public func planHybrid(sourceArchive sourceURL: URL) throws -> HybridPatchPlan {
-        let (source, ownerByHash) = try resolveOwners(sourceArchive: sourceURL)
-        let affected = Set(ownerByHash.values)
+        let source = try RDARArchive.read(sourceURL)
+        let plan = try PatchPlanner.plan(mods: [sourceURL], game: game)
         return HybridPatchPlan(
             sourceArchive: sourceURL,
             totalRecordCount: source.records.count,
-            existingRecordCount: source.records.filter { ownerByHash[$0.nameHash] != nil }.count,
-            missingRecordCount: source.records.filter { ownerByHash[$0.nameHash] == nil }.count,
-            affectedOfficialArchives: affected.sorted { $0.path < $1.path }
+            existingRecordCount: plan.overrideCount,
+            missingRecordCount: plan.newResources.count,
+            affectedOfficialArchives: plan.targets
         )
     }
 
@@ -150,73 +218,80 @@ public struct RDARPatcher: Sendable {
             suffix += 1
         }
         try manager.copyItem(at: sourceURL, to: candidate)
-        return candidate
+        return candidate.normalizedFileURL
     }
 
-    private func resolveOwners(sourceArchive sourceURL: URL) throws -> (RDARArchive, [UInt64: URL]) {
-        let source = try RDARArchive.read(sourceURL)
-        let sourceHashes = Set(source.records.map(\.nameHash))
-        var ownerByHash: [UInt64: URL] = [:]
-
-        for archiveURL in try game.officialMacArchives() {
-            let archive = try RDARArchive.read(archiveURL)
-            let matches = archive.records.filter { sourceHashes.contains($0.nameHash) }
-            for match in matches where ownerByHash[match.nameHash] == nil {
-                ownerByHash[match.nameHash] = archiveURL
-            }
-        }
-
-        return (source, ownerByHash)
+    private func patchSummary(targetURL: URL, writes: [PlannedWrite]) throws -> PatchSummary {
+        let summary = try patch(targetURL: targetURL, writes: writes)
+        return PatchSummary(
+            backupDirectory: summary.backupDirectory,
+            patchedCount: summary.patchedCount,
+            insertedCount: summary.insertedCount,
+            replacedCount: summary.replacedCount,
+            targetArchive: summary.targetArchive
+        )
     }
 
-    private func patch(source: RDARArchive, targetURL: URL, requests: [PatchRequest]) throws -> PatchSummary {
+    // MARK: - The write
+
+    /// Rewrites one target archive, applying every planned write in one pass.
+    ///
+    /// Each write's source record is transplanted **verbatim**: all 56 bytes are
+    /// copied from the mod, and only the two range pairs — which index tables
+    /// that exist per-archive and are meaningless outside their own — are
+    /// recomputed. Taking the stock record as the base and overwriting named
+    /// fields is what silently left `timestamp` and `numInlineBufferSegments`
+    /// describing the stock resource while the payload was the mod's.
+    private func patch(targetURL: URL, writes: [PlannedWrite]) throws -> ArchivePatchSummary {
         let target = try RDARArchive.read(targetURL)
-        let requestedHashes = Set(requests.map(\.hash))
+
         var targetRecordsByHash: [UInt64: [RDARRecord]] = [:]
         for record in target.records {
             targetRecordsByHash[record.nameHash, default: []].append(record)
         }
-        for hash in requestedHashes.sorted() {
-            let records = targetRecordsByHash[hash] ?? []
-            if records.count > 1 {
-                let first = try compressedData(for: records[0], in: target)
-                for record in records.dropFirst() {
-                    if try compressedData(for: record, in: target) != first {
-                        throw RDARArchiveError.ambiguousTargetRecord(hash, targetURL)
-                    }
-                }
-            }
-        }
-        let backup = try BackupStore(game: game).createBackup(
-            targetArchive: targetURL,
-            sourceArchive: source.url,
-            note: "before patching \(source.url.lastPathComponent)"
-        )
 
         var seen = Set<UInt64>()
-        let patches = try requests.map { request -> Patch in
-            guard seen.insert(request.hash).inserted else {
-                throw RDARArchiveError.duplicatePatch(request.hash)
+        for write in writes {
+            guard seen.insert(write.hash).inserted else {
+                throw RDARArchiveError.duplicatePatch(write.hash)
             }
-            let targetRecord = targetRecordsByHash[request.hash]?.first
-            if targetRecord == nil && request.sourceRecord.dependenciesStart != request.sourceRecord.dependenciesEnd {
-                throw RDARArchiveError.unsupportedDependencyInsert(request.label)
-            }
-            return Patch(request: request, targetRecord: targetRecord)
         }
 
-        let added = patches.filter { $0.targetRecord == nil }
+        // A hash appearing more than once in the target is only safe to replace
+        // wholesale when every copy holds the same payload.
+        for hash in seen.sorted() {
+            let records = targetRecordsByHash[hash] ?? []
+            guard records.count > 1 else { continue }
+            let first = try compressedData(for: records[0], in: target)
+            for record in records.dropFirst() where try compressedData(for: record, in: target) != first {
+                throw RDARArchiveError.ambiguousTargetRecord(hash, targetURL)
+            }
+        }
+
+        let backup = try BackupStore(game: game).createBackup(
+            targetArchive: targetURL,
+            sourceArchive: writes.first?.source.url,
+            note: "before applying \(writes.count) records"
+        )
+
+        let added = writes.filter { targetRecordsByHash[$0.hash] == nil }
         let newRecordBytes = added.count * 56
-        let newSegmentBytes = patches.reduce(0) { $0 + $1.request.sourceRecord.segmentCount * 16 }
-        var patchedIndex = Data(count: target.indexData.count + newRecordBytes + newSegmentBytes)
+        let newSegmentBytes = writes.reduce(0) { $0 + $1.record.segmentCount * 16 }
+        let newDependencyBytes = writes.reduce(0) { $0 + $1.dependencies.count * 8 }
+        let grownBytes = newRecordBytes + newSegmentBytes + newDependencyBytes
+
+        var patchedIndex = Data(count: target.indexData.count + grownBytes)
 
         var indexHeader = target.indexData[0..<target.recordsOffset]
-        try indexHeader.writeUInt32LE(try target.indexData.uint32LE(at: 4) + UInt32(newRecordBytes + newSegmentBytes), at: 4)
+        try indexHeader.writeUInt32LE(try target.indexData.uint32LE(at: 4) + UInt32(grownBytes), at: 4)
         try indexHeader.writeUInt32LE(target.fileEntryCount + UInt32(added.count), at: 16)
         try indexHeader.writeUInt32LE(target.fileSegmentCount + UInt32(newSegmentBytes / 16), at: 20)
+        // Never written before this change. Appending dependency bytes without
+        // it yields an index whose CRC is valid and whose count is wrong.
+        try indexHeader.writeUInt32LE(target.dependencyCount + UInt32(newDependencyBytes / 8), at: 24)
         patchedIndex.replaceSubrange(0..<target.recordsOffset, with: indexHeader)
 
-        let sortedRecords = (target.records.map { ($0.nameHash, $0.bytes) } + added.map { ($0.request.hash, $0.request.sourceRecord.bytes) })
+        let sortedRecords = (target.records.map { ($0.nameHash, $0.bytes) } + added.map { ($0.hash, $0.record.bytes) })
             .sorted { lhs, rhs in
                 if lhs.0 == rhs.0 { return false }
                 return lhs.0 < rhs.0
@@ -234,32 +309,43 @@ public struct RDARPatcher: Sendable {
             patchedSegmentsOffset..<patchedSegmentsOffset + Int(target.fileSegmentCount) * 16,
             with: target.indexData[target.segmentsOffset..<target.dependenciesOffset]
         )
-        let dependenciesStart = patchedSegmentsOffset + Int(target.fileSegmentCount) * 16 + newSegmentBytes
+        let patchedDependenciesOffset = patchedSegmentsOffset + Int(target.fileSegmentCount) * 16 + newSegmentBytes
+        let existingDependencyBytes = target.indexData.count - target.dependenciesOffset
         patchedIndex.replaceSubrange(
-            dependenciesStart..<dependenciesStart + (target.indexData.count - target.dependenciesOffset),
+            patchedDependenciesOffset..<patchedDependenciesOffset + existingDependencyBytes,
             with: target.indexData[target.dependenciesOffset..<target.indexData.count]
         )
 
         let targetHandle = try FileHandle(forUpdating: targetURL)
-        let sourceHandle = try FileHandle(forReadingFrom: source.url)
+        var sourceHandles: [URL: FileHandle] = [:]
         defer {
             try? targetHandle.close()
-            try? sourceHandle.close()
+            for handle in sourceHandles.values { try? handle.close() }
+        }
+        func sourceHandle(_ url: URL) throws -> FileHandle {
+            if let handle = sourceHandles[url] { return handle }
+            let handle = try FileHandle(forReadingFrom: url)
+            sourceHandles[url] = handle
+            return handle
         }
 
         let currentSize = try FileManager.default.attributesOfItem(atPath: targetURL.path)[.size] as? NSNumber
         var appendOffset = currentSize?.uint64Value ?? target.fileSize
         var appendedSegmentIndex = target.fileSegmentCount
         var appendedSegmentTableOffset = patchedSegmentsOffset + Int(target.fileSegmentCount) * 16
+        var appendedDependencyIndex = target.dependencyCount
+        var appendedDependencyTableOffset = patchedDependenciesOffset + existingDependencyBytes
 
-        for patch in patches {
+        for write in writes {
+            let handle = try sourceHandle(write.source.url)
+
             let newSegmentsStart = appendedSegmentIndex
-            for i in 0..<patch.request.sourceRecord.segmentCount {
-                let sourceSegment = source.segments[Int(patch.request.sourceRecord.segmentsStart) + i]
-                try sourceHandle.seek(toOffset: sourceSegment.offset)
-                let compressedData = try sourceHandle.read(upToCount: Int(sourceSegment.compressedSize)) ?? Data()
+            for i in 0..<write.record.segmentCount {
+                let sourceSegment = write.source.segments[Int(write.record.segmentsStart) + i]
+                try handle.seek(toOffset: sourceSegment.offset)
+                let compressedData = try handle.read(upToCount: Int(sourceSegment.compressedSize)) ?? Data()
                 guard compressedData.count == Int(sourceSegment.compressedSize) else {
-                    throw BinaryError.shortRead(source.url, Int(sourceSegment.compressedSize))
+                    throw BinaryError.shortRead(write.source.url, Int(sourceSegment.compressedSize))
                 }
 
                 try targetHandle.seek(toOffset: appendOffset)
@@ -274,13 +360,24 @@ public struct RDARPatcher: Sendable {
                 appendedSegmentTableOffset += 16
             }
 
-            guard let patchRecordOffsets = recordOffsets[patch.request.hash], !patchRecordOffsets.isEmpty else {
-                fatalError("missing patched record offset")
+            // The dependency table is last in the index and record slices are
+            // never shared, so appending leaves every existing range valid.
+            let newDependenciesStart = appendedDependencyIndex
+            for dependency in write.dependencies {
+                try patchedIndex.writeUInt64LE(dependency, at: appendedDependencyTableOffset)
+                appendedDependencyIndex += 1
+                appendedDependencyTableOffset += 8
             }
-            for recordOffset in patchRecordOffsets {
+
+            guard let offsets = recordOffsets[write.hash], !offsets.isEmpty else {
+                throw RDARArchiveError.planMissingWinner(write.hash)
+            }
+            for recordOffset in offsets {
+                patchedIndex.replaceSubrange(recordOffset..<recordOffset + 56, with: write.record.bytes)
                 try patchedIndex.writeUInt32LE(newSegmentsStart, at: recordOffset + 20)
                 try patchedIndex.writeUInt32LE(appendedSegmentIndex, at: recordOffset + 24)
-                patchedIndex.replaceSubrange(recordOffset + 36..<recordOffset + 56, with: patch.request.sourceRecord.sha1)
+                try patchedIndex.writeUInt32LE(newDependenciesStart, at: recordOffset + 28)
+                try patchedIndex.writeUInt32LE(appendedDependencyIndex, at: recordOffset + 32)
             }
         }
 
@@ -309,12 +406,12 @@ public struct RDARPatcher: Sendable {
         try targetHandle.seek(toOffset: 0)
         try targetHandle.write(contentsOf: header)
 
-        return PatchSummary(
+        return ArchivePatchSummary(
+            targetArchive: targetURL,
             backupDirectory: backup,
-            patchedCount: patches.count,
+            patchedCount: writes.count,
             insertedCount: added.count,
-            replacedCount: patches.count - added.count,
-            targetArchive: targetURL
+            replacedCount: writes.count - added.count
         )
     }
 
@@ -328,13 +425,13 @@ public struct RDARPatcher: Sendable {
     }
 }
 
-private struct PatchRequest {
-    let label: String
+/// One record to write into one target archive, carrying its own source.
+///
+/// Records applied to a single target now originate from several mods, so the
+/// source archive travels with the write rather than being fixed per call.
+private struct PlannedWrite {
     let hash: UInt64
-    let sourceRecord: RDARRecord
-}
-
-private struct Patch {
-    let request: PatchRequest
-    let targetRecord: RDARRecord?
+    let source: RDARArchive
+    let record: RDARRecord
+    let dependencies: [UInt64]
 }

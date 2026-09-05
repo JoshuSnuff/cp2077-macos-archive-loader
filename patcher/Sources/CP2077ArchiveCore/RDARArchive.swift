@@ -2,7 +2,7 @@ import Foundation
 
 public enum RDARArchiveError: Error, CustomStringConvertible {
     case notRDAR(URL)
-    case unsupportedDependencyInsert(String)
+    case planMissingWinner(UInt64)
     case duplicatePatch(UInt64)
     case ambiguousTargetRecord(UInt64, URL)
     case noTargetArchive(URL)
@@ -12,8 +12,8 @@ public enum RDARArchiveError: Error, CustomStringConvertible {
         switch self {
         case let .notRDAR(url):
             return "\(url.path) is not an RDAR archive"
-        case let .unsupportedDependencyInsert(label):
-            return "cannot insert \(label): source record has dependencies"
+        case let .planMissingWinner(hash):
+            return "plan has work for \(Hashes.hex64(hash)) but no winning record"
         case let .duplicatePatch(hash):
             return "duplicate patch requested for \(Hashes.hex64(hash))"
         case let .ambiguousTargetRecord(hash, url):
