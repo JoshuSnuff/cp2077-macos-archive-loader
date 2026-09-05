@@ -79,15 +79,45 @@ struct CP2077PatcherCLI {
     static func verify(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: cp2077-patcher verify --game GAME_DIR")
+            throw CLIError.usage("usage: cp2077-patcher verify --game GAME_DIR [--mods MOD.archive [...]]")
         }
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
-        for archiveURL in try game.macArchives() {
-            let archive = try RDARArchive.read(archiveURL)
-            let ok = archive.storedCRC == archive.computedCRC
-                && archive.indexPosition % 4096 == 0
-                && archive.fileSize % 4096 == 0
-            print("\(ok ? "OK  " : "BAD ") \(archiveURL.lastPathComponent) entries=\(archive.fileEntryCount) segments=\(archive.fileSegmentCount)")
+
+        // Without --mods only the structural checks can run: there is no plan to
+        // compare against, so a patched record cannot be told from a stock one.
+        let modPaths = options.values(after: "--mods")
+        let plan = modPaths.isEmpty
+            ? PatchPlan(winners: [:], officialWork: [:], newResources: [], losers: [])
+            : try PatchPlanner.plan(mods: modPaths.map { URL(fileURLWithPath: $0) }, game: game)
+        if modPaths.isEmpty {
+            print("note: no --mods given, checking archive structure only")
+        }
+
+        let report = try PlanVerifier.verify(plan: plan, game: game)
+        for archive in report.archives {
+            let counts = archive.records.isEmpty
+                ? ""
+                : " planned=\(archive.records.count)"
+            print("\(archive.isClean ? "OK  " : "BAD ") \(archive.archive.lastPathComponent)\(counts)")
+            for issue in archive.issues {
+                print("       ! \(issue)")
+            }
+            for record in archive.records where record.verdict != .matchesPlan {
+                print("       \(record.verdict == .unpatchedStockRecord ? "stock" : "differs") \(Hashes.hex64(record.hash))")
+                for issue in record.issues {
+                    print("         - \(issue)")
+                }
+            }
+        }
+
+        print(
+            "summary: \(report.matchingRecordCount) match plan,"
+                + " \(report.differingRecordCount) differ,"
+                + " \(report.unpatchedRecordCount) unpatched stock"
+                + " across \(report.archives.count) archives"
+        )
+        if !report.isClean {
+            throw CLIError.usage("verification failed")
         }
     }
 
@@ -105,34 +135,49 @@ struct CP2077PatcherCLI {
         let patcher = RDARPatcher(game: game)
         let explicitTarget = options.value("--target").map { URL(fileURLWithPath: $0) }
         let strategy = options.value("--strategy") ?? "hybrid"
+        let modURLs = modPaths.map { URL(fileURLWithPath: $0) }
 
-        for modPath in modPaths {
-            let modURL = URL(fileURLWithPath: modPath)
-            switch strategy {
-            case "hybrid":
-                if explicitTarget != nil {
-                    print("warning: --target is ignored by --strategy hybrid")
-                }
-                let summary = try patcher.patchHybrid(sourceArchive: modURL)
-                print("hybrid patched \(modURL.lastPathComponent)")
-                print("  officialOverrideRecords=\(summary.patchedExistingRecordCount)")
-                print("  loosePluginRecords=\(summary.missingRecordCount)")
-                if let looseArchive = summary.looseArchive {
-                    print("  looseArchive=\(looseArchive.path)")
-                }
-                for official in summary.officialPatches {
-                    print("  officialArchive=\(official.targetArchive.path)")
-                    print("    records=\(official.patchedCount) backup=\(official.backupDirectory.path)")
-                }
-            case "aggressive":
+        switch strategy {
+        case "hybrid":
+            if explicitTarget != nil {
+                print("warning: --target is ignored by --strategy hybrid")
+            }
+
+            // One plan across every mod. Conflicts have to be resolved before
+            // anything is written, because the write itself is last-wins.
+            let plan = try PatchPlanner.plan(mods: modURLs, game: game)
+            print("plan: \(plan.overrideCount) override records, \(plan.newResources.count) new resources")
+            print("      \(plan.targets.count) official archives to rewrite, \(plan.losers.count) conflicts")
+            for loser in plan.losers {
+                print(
+                    "  conflict: \(Hashes.hex64(loser.hash)) in \(loser.modArchive.lastPathComponent)"
+                        + " loses to \(loser.winnerArchive.lastPathComponent)"
+                )
+            }
+
+            let summary = try patcher.apply(plan: plan)
+            for archive in summary.archives {
+                print("  patched \(archive.targetArchive.lastPathComponent)")
+                print(
+                    "    records=\(archive.patchedCount) replaced=\(archive.replacedCount)"
+                        + " inserted=\(archive.insertedCount)"
+                )
+                print("    backup=\(archive.backupDirectory.path)")
+            }
+            for loose in summary.looseArchives {
+                print("  looseArchive=\(loose.path)")
+            }
+            print("patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
+        case "aggressive":
+            for modURL in modURLs {
                 let target = try patcher.chooseTarget(sourceArchive: modURL, explicitTarget: explicitTarget)
                 let summary = try patcher.patchAll(sourceArchive: modURL, targetArchive: target)
                 print("aggressively patched \(modURL.lastPathComponent) -> \(target.lastPathComponent)")
                 print("  records=\(summary.patchedCount) inserted=\(summary.insertedCount) replaced=\(summary.replacedCount)")
                 print("  backup=\(summary.backupDirectory.path)")
-            default:
-                throw CLIError.usage("unknown strategy: \(strategy)")
             }
+        default:
+            throw CLIError.usage("unknown strategy: \(strategy)")
         }
     }
 
@@ -201,7 +246,7 @@ struct CP2077PatcherCLI {
         Commands:
           scan MOD.archive [...]
           detect
-          verify --game GAME_DIR
+          verify --game GAME_DIR [--mods MOD.archive [...]]
           patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
           restore --game GAME_DIR [--backup BACKUP_DIR | --latest]
 

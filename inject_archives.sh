@@ -78,7 +78,7 @@ log "Running patcher..."
 if "$PATCHER" patch --game "$GAME_DIR" --mods "${mods_args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
     log "Patch successful"
     log "Verifying..."
-    "$PATCHER" verify --game "$GAME_DIR" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: verification reported issues"
+    "$PATCHER" verify --game "$GAME_DIR" --mods "${mods_args[@]}" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: verification reported issues"
     log "=== Archive injection complete ==="
     exit 0
 else
