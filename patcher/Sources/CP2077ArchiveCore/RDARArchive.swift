@@ -6,6 +6,7 @@ public enum RDARArchiveError: Error, CustomStringConvertible {
     case duplicatePatch(UInt64)
     case ambiguousTargetRecord(UInt64, URL)
     case noTargetArchive(URL)
+    case dependencyRangeOutOfBounds(UInt64, URL)
 
     public var description: String {
         switch self {
@@ -19,6 +20,8 @@ public enum RDARArchiveError: Error, CustomStringConvertible {
             return "target archive \(url.lastPathComponent) has non-identical duplicate records for \(Hashes.hex64(hash)); refusing ambiguous replacement"
         case let .noTargetArchive(url):
             return "could not choose a target Mac archive for \(url.lastPathComponent); pass --target"
+        case let .dependencyRangeOutOfBounds(hash, url):
+            return "record \(Hashes.hex64(hash)) in \(url.lastPathComponent) has a dependency range outside the dependency table"
         }
     }
 }
@@ -61,6 +64,9 @@ public struct RDARArchive: Sendable {
     public let dependenciesOffset: Int
     public let records: [RDARRecord]
     public let segments: [RDARSegment]
+    /// The dependency table parsed as resource hashes. The table is last in the
+    /// index and each record owns a contiguous, unshared slice of it.
+    public let dependencies: [UInt64]
 
     public static func read(_ url: URL) throws -> RDARArchive {
         let header = try readData(url: url, offset: 0, count: 52)
@@ -109,6 +115,12 @@ public struct RDARArchive: Sendable {
             ))
         }
 
+        var dependencies: [UInt64] = []
+        dependencies.reserveCapacity(Int(dependencyCount))
+        for i in 0..<Int(dependencyCount) {
+            dependencies.append(try indexData.uint64LE(at: dependenciesOffset + i * 8))
+        }
+
         return RDARArchive(
             url: url,
             header: header,
@@ -123,7 +135,8 @@ public struct RDARArchive: Sendable {
             segmentsOffset: segmentsOffset,
             dependenciesOffset: dependenciesOffset,
             records: records,
-            segments: segments
+            segments: segments,
+            dependencies: dependencies
         )
     }
 
@@ -137,5 +150,15 @@ public struct RDARArchive: Sendable {
 
     public func record(hash: UInt64) -> RDARRecord? {
         records.first { $0.nameHash == hash }
+    }
+
+    /// The dependency hashes a record declares, in table order.
+    public func dependencies(for record: RDARRecord) throws -> [UInt64] {
+        let start = Int(record.dependenciesStart)
+        let end = Int(record.dependenciesEnd)
+        guard start <= end, end <= dependencies.count else {
+            throw RDARArchiveError.dependencyRangeOutOfBounds(record.nameHash, url)
+        }
+        return Array(dependencies[start..<end])
     }
 }
