@@ -3,7 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GAME_DIR="/Users/ivk/Games/Heroic/Cyberpunk 2077"
+GAME_DIR="${CP2077_GAME_DIR:-}"
+if [ -z "$GAME_DIR" ]; then
+    echo "ERROR: CP2077_GAME_DIR is not set. Export it to point at your Cyberpunk 2077 install." >&2
+    echo "  e.g. export CP2077_GAME_DIR=\"/path/to/Cyberpunk 2077\"" >&2
+    exit 1
+fi
 PRISTINE_DIR="$SCRIPT_DIR/pristine"
 LOG_DIR="$SCRIPT_DIR/logs"
 

@@ -2,13 +2,19 @@
 
 Archive mod loader for Cyberpunk 2077 on macOS (Apple Silicon). Injects `.archive` mods into the game and restores pristine originals when needed, using APFS clonefile for instant, space-efficient copies.
 
+> **Note:** Tested on the GOG version only. Other storefronts may work if the archive layout under `archive/Mac/` is the same.
+
 ## Setup
 
-1. Clone this repo into your Heroic Games Launcher directory (alongside the game).
-2. Copy the vanilla game archives you plan to mod into `pristine/`:
+1. Clone this repo somewhere convenient.
+2. Set the `CP2077_GAME_DIR` environment variable to your Cyberpunk 2077 install directory:
+   ```bash
+   export CP2077_GAME_DIR="/path/to/Cyberpunk 2077"
+   ```
+3. Copy the vanilla game archives you plan to mod into `pristine/`:
    - `pristine/content/` — base game archives from `archive/Mac/content/`
    - `pristine/ep1/` — Phantom Liberty archives from `archive/Mac/ep1/`
-3. Drop your `.archive` mod files into `enabled/`.
+4. Drop your `.archive` mod files into `enabled/`.
 
 ## Usage
 
@@ -53,4 +59,4 @@ Reverts all modified archives to their pristine state and removes any loose patc
 
 - macOS on Apple Silicon (arm64)
 - APFS filesystem (default on modern macOS)
-- Cyberpunk 2077 installed via Heroic Games Launcher
+- Cyberpunk 2077 (tested on GOG)
