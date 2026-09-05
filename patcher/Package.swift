@@ -10,7 +10,6 @@ let package = Package(
     ],
     products: [
         .executable(name: "cp2077-patcher", targets: ["cp2077-patcher"]),
-        .executable(name: "CP2077 Mac Archive Patcher", targets: ["CP2077MacArchivePatcherApp"]),
         .library(name: "CP2077ArchiveCore", targets: ["CP2077ArchiveCore"]),
     ],
     targets: [
@@ -19,10 +18,6 @@ let package = Package(
         ),
         .executableTarget(
             name: "cp2077-patcher",
-            dependencies: ["CP2077ArchiveCore"]
-        ),
-        .executableTarget(
-            name: "CP2077MacArchivePatcherApp",
             dependencies: ["CP2077ArchiveCore"]
         ),
         .testTarget(
