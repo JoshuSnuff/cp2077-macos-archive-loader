@@ -10,3 +10,6 @@ logs/*
 build/*
 !build/.gitkeep
 .claude/
+CLAUDE.md
+AGENTS.md
+docs/

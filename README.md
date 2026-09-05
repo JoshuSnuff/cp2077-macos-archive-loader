@@ -184,17 +184,16 @@ are the only ones doing anything.
 
 ## Roadmap
 
-Designs in `docs/superpowers/specs/`:
-
-1. [`archive-patcher-parity`](docs/superpowers/specs/2026-09-05-archive-patcher-parity-design.md)
-   — correct record transplant, global first-wins winner resolution, patch every
-   owner, plan-based verification.
-2. [`vendor-red4ext-runtime-files`](docs/superpowers/specs/2026-09-05-vendor-red4ext-runtime-files-design.md)
-   — track the hand-written game-directory files so a reinstall stops reverting
+1. **Patcher parity.** Transplant the source record whole instead of copying
+   named fields onto the stock record, resolve conflict winners globally with
+   Windows first-wins semantics, patch every official owner of a duplicated hash,
+   and extend `verify` to compare each output record against what was intended.
+2. **Track the game-directory files.** The hook script, RED4ext configs, and
+   `r6/scripts` mods exist only in the game directory, where a reinstall reverts
    them.
-3. [`loose-archive-consolidation`](docs/superpowers/specs/2026-09-05-loose-archive-consolidation-design.md)
-   — emit one deterministic loose archive containing only genuinely new
-   resources. Depends on 1.
+3. **Consolidate loose archives.** Emit one deterministic archive containing only
+   genuinely new resources, instead of a whole-mod copy per contributing mod.
+   Depends on 1.
 
 Not planned: reviving RED4ext native hooking would need a real address database
 built for the macOS 2.3.1 binary. That is the only route to ArchiveXL, TweakXL,
@@ -208,7 +207,6 @@ and CET, and it is a substantial reverse-engineering effort with uncertain payof
 ├── launch_modded.sh        # full modded launch sequence
 ├── inject_archives.sh      # inject archive mods
 ├── restore_archives.sh     # restore vanilla archives
-├── docs/superpowers/specs/ # design documents
 ├── enabled/                # your .archive mods (contents ignored)
 ├── pristine/               # vanilla baselines — irreplaceable (contents ignored)
 │   ├── content/            #   32 archives
