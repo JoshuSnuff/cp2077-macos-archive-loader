@@ -175,7 +175,7 @@ struct TestGame {
     func writeOfficial(_ name: String, records: [TestRecord]) throws -> URL {
         let url = contentDirectory.appending(path: name)
         try writeTestArchive(to: url, records: records)
-        return url
+        return url.normalizedFileURL
     }
 
     /// Writes a mod archive outside the game tree.
@@ -183,7 +183,7 @@ struct TestGame {
     func writeMod(_ name: String, records: [TestRecord]) throws -> URL {
         let url = root.appending(path: name)
         try writeTestArchive(to: url, records: records)
-        return url
+        return url.normalizedFileURL
     }
 
     func cleanUp() {

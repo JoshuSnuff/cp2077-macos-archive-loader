@@ -31,6 +31,8 @@ public struct RDARRecord: Sendable {
     public let offset: Int
     public let nameHash: UInt64
     public let bytes: Data
+    public let timestamp: UInt64
+    public let numInlineBufferSegments: UInt32
     public let segmentsStart: UInt32
     public let segmentsEnd: UInt32
     public let dependenciesStart: UInt32
@@ -95,6 +97,8 @@ public struct RDARArchive: Sendable {
                 offset: offset,
                 nameHash: try indexData.uint64LE(at: offset),
                 bytes: Data(bytes),
+                timestamp: try indexData.uint64LE(at: offset + 8),
+                numInlineBufferSegments: try indexData.uint32LE(at: offset + 16),
                 segmentsStart: try indexData.uint32LE(at: offset + 20),
                 segmentsEnd: try indexData.uint32LE(at: offset + 24),
                 dependenciesStart: try indexData.uint32LE(at: offset + 28),

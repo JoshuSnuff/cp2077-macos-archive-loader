@@ -37,7 +37,7 @@ public struct GameInstall: Sendable {
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             ).filter { $0.pathExtension == "archive" }
-        }.sorted { $0.path < $1.path }
+        }.map(\.normalizedFileURL).sorted { $0.path < $1.path }
     }
 
     public func officialMacArchives() throws -> [URL] {
@@ -61,5 +61,16 @@ public struct GameInstall: Sendable {
         defaultCandidates().first { candidate in
             FileManager.default.fileExists(atPath: candidate.appending(path: "Cyberpunk2077.app").path)
         }
+    }
+}
+
+public extension URL {
+    /// A file URL reduced to one canonical spelling.
+    ///
+    /// Archive URLs are used as dictionary keys in a `PatchPlan`, and a game
+    /// directory reached through a symlink (`/var` vs `/private/var`, or any
+    /// user-made link) otherwise yields two unequal URLs for one file.
+    var normalizedFileURL: URL {
+        resolvingSymlinksInPath().standardizedFileURL
     }
 }
