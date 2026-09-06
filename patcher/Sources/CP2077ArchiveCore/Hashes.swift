@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum Hashes {
@@ -34,6 +35,21 @@ public enum Hashes {
 
     public static func hex64(_ value: UInt64) -> String {
         "0x" + String(value, radix: 16).leftPadded(to: 16, with: "0")
+    }
+
+    /// Streaming SHA-256 of a file, lowercase hex.
+    ///
+    /// Read in chunks because the archives this hashes run to gigabytes and
+    /// the baseline hashes every one of them.
+    public static func sha256Hex(ofFileAt url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 
