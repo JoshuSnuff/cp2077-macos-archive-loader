@@ -14,7 +14,7 @@ enum CLIError: Error, CustomStringConvertible {
 }
 
 @main
-struct CP2077PatcherCLI {
+struct PatcherCLI {
     static func main() {
         do {
             try run()
@@ -53,7 +53,7 @@ struct CP2077PatcherCLI {
     }
 
     static func scan(_ args: [String]) throws {
-        guard !args.isEmpty else { throw CLIError.usage("usage: cp2077-patcher scan MOD.archive [...]") }
+        guard !args.isEmpty else { throw CLIError.usage("usage: patcher scan MOD.archive [...]") }
         for arg in args {
             let url = URL(fileURLWithPath: arg)
             let scan = try ModScanner.scan(url: url)
@@ -69,17 +69,73 @@ struct CP2077PatcherCLI {
     }
 
     static func detect(_ args: [String]) throws {
-        if let detected = GameInstall.detectInstalledGame() {
-            print(detected.path)
+        var showAll = false
+        var format = "text"
+        var explicitPath: String?
+        var index = 0
+
+        while index < args.count {
+            switch args[index] {
+            case "--all":
+                showAll = true
+                index += 1
+            case "--format":
+                guard index + 1 < args.count else { throw CLIError.missingValue("--format") }
+                format = args[index + 1]
+                index += 2
+            case "--game":
+                guard index + 1 < args.count else { throw CLIError.missingValue("--game") }
+                explicitPath = args[index + 1]
+                index += 2
+            default:
+                throw CLIError.usage("unknown detect option: \(args[index])")
+            }
+        }
+
+        guard format == "text" || format == "json" else {
+            throw CLIError.usage("unknown detect format: \(format) (expected text or json)")
+        }
+        if showAll && explicitPath != nil {
+            throw CLIError.usage("detect --all cannot be combined with --game")
+        }
+
+        let candidates: [GameCandidate]
+        if showAll {
+            candidates = GameDiscovery.discover()
         } else {
+            let explicitRoot = explicitPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+            candidates = try GameDiscovery.resolve(explicitRoot: explicitRoot)
+        }
+
+        guard !candidates.isEmpty else {
             throw CLIError.usage("could not detect Cyberpunk 2077. Pass --game explicitly.")
+        }
+
+        if !showAll && candidates.count > 1 {
+            let paths = candidates.map { "  \($0.root.path)" }.joined(separator: "\n")
+            throw CLIError.usage(
+                "multiple Cyberpunk 2077 installations found; pass --game explicitly:\n\(paths)"
+            )
+        }
+
+        let selected = showAll ? candidates : [candidates[0]]
+        if format == "json" {
+            let output = selected.map(DetectedGame.init)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(output)
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            for candidate in selected {
+                print(candidate.root.path)
+            }
         }
     }
 
     static func verify(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: cp2077-patcher verify --game GAME_DIR [--mods MOD.archive [...]]")
+            throw CLIError.usage("usage: patcher verify --game GAME_DIR [--mods MOD.archive [...]]")
         }
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
 
@@ -124,11 +180,11 @@ struct CP2077PatcherCLI {
     static func patch(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: cp2077-patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
         let modPaths = options.values(after: "--mods")
         guard !modPaths.isEmpty else {
-            throw CLIError.usage("usage: cp2077-patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
@@ -189,7 +245,7 @@ struct CP2077PatcherCLI {
               let targetPath = options.value("--target")
         else {
             throw CLIError.usage(
-                "usage: cp2077-patcher patch-hashes --game GAME_DIR --source MOD.archive --target TARGET.archive --hashes HEX [...]"
+                "usage: patcher patch-hashes --game GAME_DIR --source MOD.archive --target TARGET.archive --hashes HEX [...]"
             )
         }
 
@@ -227,7 +283,7 @@ struct CP2077PatcherCLI {
     static func restore(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: cp2077-patcher restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
+            throw CLIError.usage("usage: patcher restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
         }
         let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
         let restored: URL
@@ -241,11 +297,11 @@ struct CP2077PatcherCLI {
 
     static func printUsage() {
         print("""
-        cp2077-patcher
+        patcher
 
         Commands:
           scan MOD.archive [...]
-          detect
+          detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
           patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
           restore --game GAME_DIR [--backup BACKUP_DIR | --latest]
@@ -253,6 +309,18 @@ struct CP2077PatcherCLI {
         Scope:
           Native macOS Cyberpunk 2077, archive-only PC .archive mods.
         """)
+    }
+}
+
+private struct DetectedGame: Encodable {
+    let path: String
+    let version: String
+    let sources: [String]
+
+    init(_ candidate: GameCandidate) {
+        path = candidate.root.path
+        version = candidate.version
+        sources = candidate.sources
     }
 }
 

@@ -248,7 +248,7 @@ import Testing
     let plan = try PatchPlanner.plan(mods: [mod], game: game.install)
     let summary = try RDARPatcher(game: game.install).apply(plan: plan)
 
-    #expect(summary.looseArchive?.lastPathComponent == "basegame_99_cp2077_runtime.archive")
+    #expect(summary.looseArchive?.lastPathComponent == "basegame_99_archive_loader.archive")
     #expect(FileManager.default.fileExists(atPath: summary.looseArchive!.path))
 
     let loose = try RDARArchive.read(summary.looseArchive!)

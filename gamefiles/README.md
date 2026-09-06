@@ -21,7 +21,7 @@ not synchronized or published by this repository.
 Use the repository-root sync script to compare or transfer them:
 
 ```bash
-export CP2077_GAME_DIR="/path/to/Cyberpunk 2077"
+export ARCHIVE_LOADER_GAME_DIR="/path/to/Cyberpunk 2077"
 ./sync_gamefiles.sh --check
 ./sync_gamefiles.sh
 ./sync_gamefiles.sh --pull

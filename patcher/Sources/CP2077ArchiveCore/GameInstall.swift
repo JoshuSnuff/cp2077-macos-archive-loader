@@ -16,7 +16,7 @@ public struct GameInstall: Sendable {
     }
 
     public var patcherDirectory: URL {
-        root.appending(path: "archive/Mac/_cp2077_mac_patcher", directoryHint: .isDirectory)
+        root.appending(path: "archive/Mac/_patcher", directoryHint: .isDirectory)
     }
 
     public var backupDirectory: URL {
@@ -28,7 +28,7 @@ public struct GameInstall: Sendable {
     }
 
     public var managedLooseArchive: URL {
-        managedLooseArchiveDirectory.appending(path: "basegame_99_cp2077_runtime.archive")
+        managedLooseArchiveDirectory.appending(path: "basegame_99_archive_loader.archive")
     }
 
     public func macArchives() throws -> [URL] {
@@ -48,24 +48,12 @@ public struct GameInstall: Sendable {
         try macArchives().filter { url in
             let name = url.lastPathComponent
             return !name.hasPrefix("basegame_99_")
+                && !url.path.contains("/_patcher/")
                 && !url.path.contains("/_cp2077_mac_patcher/")
                 && !url.path.contains("/_disabled_mod_tests/")
         }
     }
 
-    public static func defaultCandidates() -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            home.appending(path: "Library/Application Support/Steam/steamapps/common/Cyberpunk 2077", directoryHint: .isDirectory),
-            home.appending(path: "Library/Application Support/GOG.com/Galaxy/Applications/55230414410511377", directoryHint: .isDirectory)
-        ]
-    }
-
-    public static func detectInstalledGame() -> URL? {
-        defaultCandidates().first { candidate in
-            FileManager.default.fileExists(atPath: candidate.appending(path: "Cyberpunk2077.app").path)
-        }
-    }
 }
 
 public extension URL {

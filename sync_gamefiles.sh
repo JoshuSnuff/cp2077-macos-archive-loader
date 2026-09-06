@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAMEFILES_DIR="$SCRIPT_DIR/gamefiles"
-GAME_DIR="${CP2077_GAME_DIR:-}"
+GAME_DIR="${ARCHIVE_LOADER_GAME_DIR:-}"
 LOG_DIR="$SCRIPT_DIR/logs"
 MODE="push"
 
@@ -44,8 +44,8 @@ if [ "$#" -eq 1 ]; then
 fi
 
 if [ -z "$GAME_DIR" ]; then
-    echo "ERROR: CP2077_GAME_DIR is not set. Export it to point at your Cyberpunk 2077 install." >&2
-    echo "  e.g. export CP2077_GAME_DIR=\"/path/to/Cyberpunk 2077\"" >&2
+    echo "ERROR: ARCHIVE_LOADER_GAME_DIR is not set. Export it to point at your Cyberpunk 2077 install." >&2
+    echo "  e.g. export ARCHIVE_LOADER_GAME_DIR=\"/path/to/Cyberpunk 2077\"" >&2
     exit 1
 fi
 

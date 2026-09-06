@@ -4,12 +4,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "cp2077-patcher",
+    name: "patcher",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "cp2077-patcher", targets: ["cp2077-patcher"]),
+        .executable(name: "patcher", targets: ["patcher"]),
         .library(name: "CP2077ArchiveCore", targets: ["CP2077ArchiveCore"]),
     ],
     targets: [
@@ -17,8 +17,9 @@ let package = Package(
             name: "CP2077ArchiveCore"
         ),
         .executableTarget(
-            name: "cp2077-patcher",
-            dependencies: ["CP2077ArchiveCore"]
+            name: "patcher",
+            dependencies: ["CP2077ArchiveCore"],
+            path: "Sources/PatcherCLI"
         ),
         .testTarget(
             name: "CP2077ArchiveCoreTests",

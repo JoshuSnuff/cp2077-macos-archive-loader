@@ -8,7 +8,7 @@ import Testing
 
 @Test func patchPreservesUnrelatedDuplicateTargetHashes() throws {
     let root = FileManager.default.temporaryDirectory
-        .appending(path: "cp2077-patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
 
     let gameRoot = root.appending(path: "Game", directoryHint: .isDirectory)
@@ -50,7 +50,7 @@ import Testing
 
 @Test func patchReplacesIdenticalDuplicateTargetHashes() throws {
     let root = FileManager.default.temporaryDirectory
-        .appending(path: "cp2077-patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
 
     let gameRoot = root.appending(path: "Game", directoryHint: .isDirectory)
@@ -95,7 +95,7 @@ import Testing
 
 @Test func patchRejectsNonIdenticalDuplicateTargetHashes() throws {
     let root = FileManager.default.temporaryDirectory
-        .appending(path: "cp2077-patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        .appending(path: "patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
 
     let gameRoot = root.appending(path: "Game", directoryHint: .isDirectory)

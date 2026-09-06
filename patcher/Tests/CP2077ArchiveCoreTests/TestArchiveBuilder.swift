@@ -153,7 +153,7 @@ struct TestGame {
 
     init() throws {
         root = FileManager.default.temporaryDirectory
-            .appending(path: "cp2077-patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "patcher-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
         gameRoot = root.appending(path: "Game", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: contentDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: ep1Directory, withIntermediateDirectories: true)
