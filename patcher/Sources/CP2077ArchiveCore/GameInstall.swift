@@ -55,15 +55,6 @@ public struct GameInstall: Sendable {
         root.appending(path: "archive/Mac/mod", directoryHint: .isDirectory)
     }
 
-    /// Per-run patcher backups.
-    ///
-    /// These lived under `archive/Mac/_patcher/backups/` before 0.1. Moving
-    /// them out is what lets the negative-evidence gate read anything inside
-    /// `archive/Mac/` as somebody else's work, or our own from before 0.1.
-    public var backupDirectory: URL {
-        loaderDirectory.appending(path: "backups", directoryHint: .isDirectory)
-    }
-
     /// Backup directories written by pre-0.1 sessions, newest naming first.
     ///
     /// Recognised so the gate can refuse on them and an explicit cleanup can
