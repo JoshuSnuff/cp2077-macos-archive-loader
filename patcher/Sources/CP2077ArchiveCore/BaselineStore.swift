@@ -136,6 +136,75 @@ public struct BaselineStore: Sendable {
         }
     }
 
+    /// Clones every recorded archive from the published generation back over
+    /// the live one. Each file is replaced by rename, so an interrupted
+    /// restore leaves whole archives rather than truncated ones.
+    @discardableResult
+    public func restore(onRestored: (URL) -> Void = { _ in }) throws -> [URL] {
+        guard let generation = publishedGeneration, let manifest = try publishedManifest() else {
+            throw BaselineError.noPublishedBaseline(game.pristinePointer)
+        }
+
+        var restored: [URL] = []
+        for entry in manifest.archives {
+            let source = generation.appending(path: entry.path)
+            let destination = game.root.appending(path: "archive/Mac/\(entry.path)")
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Clone.replaceFile(from: source, to: destination)
+            restored.append(destination)
+            onRestored(destination)
+        }
+        return restored
+    }
+
+    /// Compares the live archives against the published generation.
+    ///
+    /// `deep: false` compares sizes only, which is what `status` runs by
+    /// default; `deep: true` re-hashes.
+    public func compareLive(deep: Bool) throws -> BaselineComparison {
+        guard let manifest = try publishedManifest() else {
+            throw BaselineError.noPublishedBaseline(game.pristinePointer)
+        }
+        let manager = FileManager.default
+
+        var matching: [String] = []
+        var drifted: [String] = []
+        var missing: [String] = []
+
+        for entry in manifest.archives {
+            let live = game.root.appending(path: "archive/Mac/\(entry.path)")
+            guard manager.fileExists(atPath: live.path) else {
+                missing.append(entry.path)
+                continue
+            }
+
+            let attributes = try manager.attributesOfItem(atPath: live.path)
+            let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+            if size != entry.size {
+                drifted.append(entry.path)
+            } else if deep, try Hashes.sha256Hex(ofFileAt: live) != entry.sha256 {
+                drifted.append(entry.path)
+            } else {
+                matching.append(entry.path)
+            }
+        }
+
+        let recorded = Set(manifest.archives.map(\.path))
+        let unrecorded = try game.officialMacArchives()
+            .map(Self.relativeArchivePath)
+            .filter { !recorded.contains($0) }
+
+        return BaselineComparison(
+            matching: matching.sorted(),
+            drifted: drifted.sorted(),
+            missing: missing.sorted(),
+            unrecorded: unrecorded.sorted()
+        )
+    }
+
     static func relativeArchivePath(_ archive: URL) -> String {
         let parent = archive.deletingLastPathComponent().lastPathComponent
         return "\(parent)/\(archive.lastPathComponent)"
@@ -169,4 +238,28 @@ public struct BaselineStore: Sendable {
             throw CloneError.failed(source: source, destination: destination, code: errno)
         }
     }
+}
+
+/// How the live archives stand against the published generation.
+///
+/// The three failure categories are deliberately distinct. Drift is
+/// recoverable — the recorded bytes are still in the generation. A missing
+/// recorded file is not: the baseline can no longer be fully restored. An
+/// unrecorded live file is neither, and is usually a language pack installed
+/// after capture, so it is reported and never touched.
+public struct BaselineComparison: Sendable, Equatable {
+    public let matching: [String]
+    public let drifted: [String]
+    public let missing: [String]
+    public let unrecorded: [String]
+
+    public init(matching: [String], drifted: [String], missing: [String], unrecorded: [String]) {
+        self.matching = matching
+        self.drifted = drifted
+        self.missing = missing
+        self.unrecorded = unrecorded
+    }
+
+    public var isRestorable: Bool { missing.isEmpty }
+    public var isPristine: Bool { drifted.isEmpty && missing.isEmpty }
 }
