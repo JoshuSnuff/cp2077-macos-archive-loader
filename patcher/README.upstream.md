@@ -93,7 +93,8 @@ Verify the Mac game archives:
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077"
 ```
 
-Patch mods with the default hybrid strategy:
+Patch mods with the default hybrid strategy. Completed backup runs retain the
+newest three by default; pass `--keep N` to choose another count:
 
 ```sh
 .build/debug/cp2077-patcher patch \
@@ -111,7 +112,8 @@ Aggressive fallback mode patches the whole source archive into one target archiv
   --mods /path/to/mod.archive
 ```
 
-Restore latest backup:
+Restore every archive from the latest backup run. If that run is incomplete,
+the command refuses without changing any archive:
 
 ```sh
 .build/debug/cp2077-patcher restore \
@@ -119,12 +121,20 @@ Restore latest backup:
   --latest
 ```
 
-Restore a specific backup:
+Restore a specific run, or one archive directory within a run:
 
 ```sh
 .build/debug/cp2077-patcher restore \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
-  --backup "/path/to/Cyberpunk 2077/archive/Mac/_cp2077_mac_patcher/backups/backup-id"
+  --backup "/path/to/Cyberpunk 2077/archive/Mac/_patcher/backups/run-id"
+```
+
+Preview or perform standalone pruning:
+
+```sh
+.build/debug/cp2077-patcher prune \
+  --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
+  --keep 3 --dry-run
 ```
 
 ## Safety Model
@@ -132,10 +142,12 @@ Restore a specific backup:
 Backups are stored in:
 
 ```text
-Cyberpunk 2077/archive/Mac/_cp2077_mac_patcher/backups/
+Cyberpunk 2077/archive/Mac/_patcher/backups/
 ```
 
-Each official archive mutation creates a full backup first. This is intentionally disk-heavy because it keeps rollback simple and reliable.
+Each patch invocation creates one run directory containing a manifest and one
+full backup for every official archive it mutates. Only completed runs can be
+restored as a set; incomplete runs remain individually recoverable.
 
 Use the app's **Backups** screen to restore a game file or delete old backups.
 

@@ -45,6 +45,8 @@ struct PatcherCLI {
             try patchHashes(args)
         case "restore":
             try restore(args)
+        case "prune":
+            try prune(args)
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -180,11 +182,11 @@ struct PatcherCLI {
     static func patch(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
         let modPaths = options.values(after: "--mods")
         guard !modPaths.isEmpty else {
-            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
@@ -192,6 +194,7 @@ struct PatcherCLI {
         let explicitTarget = options.value("--target").map { URL(fileURLWithPath: $0) }
         let strategy = options.value("--strategy") ?? "hybrid"
         let modURLs = modPaths.map { URL(fileURLWithPath: $0) }
+        let keep = try retentionCount(options.value("--keep"))
 
         switch strategy {
         case "hybrid":
@@ -211,7 +214,7 @@ struct PatcherCLI {
                 )
             }
 
-            let summary = try patcher.apply(plan: plan)
+            let summary = try patcher.apply(plan: plan, keepBackups: keep)
             for archive in summary.archives {
                 print("  patched \(archive.targetArchive.lastPathComponent)")
                 print(
@@ -227,7 +230,11 @@ struct PatcherCLI {
         case "aggressive":
             for modURL in modURLs {
                 let target = try patcher.chooseTarget(sourceArchive: modURL, explicitTarget: explicitTarget)
-                let summary = try patcher.patchAll(sourceArchive: modURL, targetArchive: target)
+                let summary = try patcher.patchAll(
+                    sourceArchive: modURL,
+                    targetArchive: target,
+                    keepBackups: keep
+                )
                 print("aggressively patched \(modURL.lastPathComponent) -> \(target.lastPathComponent)")
                 print("  records=\(summary.patchedCount) inserted=\(summary.insertedCount) replaced=\(summary.replacedCount)")
                 print("  backup=\(summary.backupDirectory.path)")
@@ -286,13 +293,40 @@ struct PatcherCLI {
             throw CLIError.usage("usage: patcher restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
         }
         let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
-        let restored: URL
         if let backupPath = options.value("--backup") {
-            restored = try store.restore(backupDirectory: URL(fileURLWithPath: backupPath))
+            _ = try store.restore(backupDirectory: URL(fileURLWithPath: backupPath)) {
+                print("restored \($0.path)")
+            }
         } else {
-            restored = try store.restoreLatest()
+            _ = try store.restoreLatest {
+                print("restored \($0.path)")
+            }
         }
-        print("restored \(restored.path)")
+    }
+
+    static func prune(_ args: [String]) throws {
+        let options = try Options(args)
+        guard let gamePath = options.value("--game") else {
+            throw CLIError.usage("usage: patcher prune --game GAME_DIR [--keep N] [--dry-run]")
+        }
+        let dryRun = args.contains("--dry-run")
+        let keep = try retentionCount(options.value("--keep"))
+        let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
+        let removed = try store.prune(keep: keep, dryRun: dryRun)
+        for directory in removed {
+            print("\(dryRun ? "would prune" : "pruned") \(directory.path)")
+        }
+        if removed.isEmpty {
+            print("nothing to prune")
+        }
+    }
+
+    static func retentionCount(_ value: String?) throws -> Int {
+        guard let value else { return 3 }
+        guard let count = Int(value), count >= 0 else {
+            throw CLIError.usage("--keep requires a non-negative integer")
+        }
+        return count
     }
 
     static func printUsage() {
@@ -303,8 +337,9 @@ struct PatcherCLI {
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
-          patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
-          restore --game GAME_DIR [--backup BACKUP_DIR | --latest]
+          patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
+          restore --game GAME_DIR [--backup RUN_OR_ARCHIVE_DIR | --latest]
+          prune --game GAME_DIR [--keep N] [--dry-run]
 
         Scope:
           Native macOS Cyberpunk 2077, archive-only PC .archive mods.

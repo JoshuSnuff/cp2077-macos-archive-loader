@@ -20,6 +20,8 @@ public struct LosingRecord: Sendable {
 /// The plan is the artifact `patch` applies and `verify` checks against, so both
 /// agree on what the install is supposed to contain.
 public struct PatchPlan: Sendable {
+    /// Every mod considered by the plan, in ASCII path order.
+    public let mods: [URL]
     /// One winning mod record per resource hash.
     public let winners: [UInt64: WinningRecord]
     /// Every official archive owning a winning hash, and the hashes to write there.
@@ -30,11 +32,13 @@ public struct PatchPlan: Sendable {
     public let losers: [LosingRecord]
 
     public init(
+        mods: [URL] = [],
         winners: [UInt64: WinningRecord],
         officialWork: [URL: [UInt64]],
         newResources: [UInt64],
         losers: [LosingRecord]
     ) {
+        self.mods = mods.map(\.normalizedFileURL).sorted { $0.path < $1.path }
         self.winners = winners
         self.officialWork = officialWork
         self.newResources = newResources
@@ -114,6 +118,7 @@ public enum PatchPlanner {
         }
 
         return PatchPlan(
+            mods: mods,
             winners: winners,
             officialWork: officialWork.mapValues { $0.sorted() },
             newResources: newResources,
