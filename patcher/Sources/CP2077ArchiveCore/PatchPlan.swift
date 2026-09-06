@@ -59,7 +59,8 @@ public enum PatchPlanner {
     /// Builds a plan from the mods and the install's official archives.
     ///
     /// Mods are walked in ASCII path order, matching the `find | sort -z` order
-    /// `inject_archives.sh` feeds in, and the **first** mod to claim a hash wins.
+    /// The complete enabled-mod collection feeds in, and the **first** mod to
+    /// claim a hash wins.
     /// The write mechanism is inherently last-wins, so the Windows "first archive
     /// wins" rule has to be resolved here, before anything is written.
     ///

@@ -16,9 +16,11 @@ gamefiles/engine/tools/libscc_lib.dylib
 gamefiles/engine/tools/inputloader.pl
 gamefiles/r6/scripts/
 .claude/
+.codex/
 CLAUDE.md
 AGENTS.md
 docs/
 
 # Vendored patcher build output
 patcher/.build/
+AGENT-NOTES.md

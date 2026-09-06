@@ -10,8 +10,8 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") --version VERSION
 
-Assemble build/archive-loader-VERSION-macos-arm64/ with the read-only installer
-and patcher discovery payload.
+Assemble build/archive-loader-VERSION-macos-arm64.zip with the archive-loader
+runtime payload.
 EOF
 }
 
@@ -50,13 +50,15 @@ case "$VERSION" in
 esac
 
 BUILD_DIR="$REPOSITORY_DIR/build"
-OUTPUT_DIR="$BUILD_DIR/archive-loader-$VERSION-macos-arm64"
-if [ -e "$OUTPUT_DIR" ]; then
-    echo "ERROR: output already exists: $OUTPUT_DIR" >&2
+OUTPUT_ZIP="$BUILD_DIR/archive-loader-$VERSION-macos-arm64.zip"
+BINARY="$REPOSITORY_DIR/bin/archive-loader"
+
+if [ -e "$OUTPUT_ZIP" ]; then
+    echo "ERROR: output already exists: $OUTPUT_ZIP" >&2
     exit 1
 fi
-if [ ! -x "$REPOSITORY_DIR/bin/archive-loader" ]; then
-    echo "ERROR: missing executable: $REPOSITORY_DIR/bin/archive-loader" >&2
+if [ ! -x "$BINARY" ]; then
+    echo "ERROR: missing executable: $BINARY" >&2
     exit 1
 fi
 
@@ -64,32 +66,38 @@ fi
 # directory leaves this machine nothing else records which build it holds. A
 # mislabelled release is indistinguishable from a correct one, so refuse rather
 # than name the payload after a version it does not report.
-BINARY_VERSION="$("$REPOSITORY_DIR/bin/archive-loader" --version)"
+BINARY_VERSION="$("$BINARY" --version)"
 if [ "$BINARY_VERSION" != "archive-loader $VERSION" ]; then
     echo "ERROR: --version $VERSION disagrees with the binary, which reports: $BINARY_VERSION" >&2
     echo "  rebuild bin/archive-loader, or pass the version it was built with" >&2
     exit 1
 fi
 
+# The __RESTRICT segment is what stops an ambient DYLD_INSERT_LIBRARIES from
+# injecting RED4ext into the wrapper. Shipping without it is silent.
+if ! otool -l "$BINARY" | grep -q "__RESTRICT"; then
+    echo "ERROR: $BINARY has no __RESTRICT segment; do not ship it" >&2
+    exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
 STAGING_ROOT="$(mktemp -d "$BUILD_DIR/.archive-loader-release.XXXXXX")"
-clean_up() {
-    rm -rf "$STAGING_ROOT"
-}
-trap clean_up EXIT
+trap 'rm -rf "$STAGING_ROOT"' EXIT
 
-STAGING_DIR="$STAGING_ROOT/archive-loader-$VERSION-macos-arm64"
-PAYLOAD_DIR="$STAGING_DIR/payload/archive-loader"
-mkdir -p \
-    "$PAYLOAD_DIR/bin" \
-    "$PAYLOAD_DIR/scripts" \
-    "$PAYLOAD_DIR/gamefiles" \
-    "$PAYLOAD_DIR/manifests"
+PAYLOAD="$STAGING_ROOT/archive-loader"
+# Only immutable program files ship. baselines/, pristine, state/, and logs/
+# are created at first run, so no extraction can destroy a user's baseline or
+# mod collection.
+mkdir -p "$PAYLOAD/bin" "$PAYLOAD/mods/enabled"
 
-cp "$REPOSITORY_DIR/install.sh" "$STAGING_DIR/install.sh"
-cp "$REPOSITORY_DIR/release/README.md" "$STAGING_DIR/README.txt"
-cp "$REPOSITORY_DIR/release/payload/archive-loader/README.md" "$PAYLOAD_DIR/README.md"
-cp "$REPOSITORY_DIR/bin/archive-loader" "$PAYLOAD_DIR/bin/archive-loader"
+cp "$BINARY" "$PAYLOAD/bin/archive-loader"
+cp "$REPOSITORY_DIR/release/payload/archive-loader/setup.sh" "$PAYLOAD/setup.sh"
+cp "$REPOSITORY_DIR/release/payload/archive-loader/README.txt" "$PAYLOAD/README.txt"
+printf '%s\n' "$VERSION" > "$PAYLOAD/version"
+touch "$PAYLOAD/mods/enabled/.keep"
 
-mv "$STAGING_DIR" "$OUTPUT_DIR"
-echo "$OUTPUT_DIR"
+chmod +x "$PAYLOAD/setup.sh" "$PAYLOAD/bin/archive-loader"
+
+( cd "$STAGING_ROOT" && zip -qry "$OUTPUT_ZIP" archive-loader )
+
+echo "$OUTPUT_ZIP"

@@ -1,89 +1,87 @@
 # archive-loader
 
-Archive mod loader for Cyberpunk 2077 on macOS and Apple Silicon.
+`archive-loader` is a native archive-mod loader for Cyberpunk 2077 on macOS and
+Apple Silicon. A release contains one binary and a setup script. It wraps the
+launcher you already use, patches official Mac archives in place, verifies the
+planned changes, and restores the recorded baseline when the launcher exits.
 
-> **Pre-release:** the loader works locally, but the installer is not ready for
-> general use. `install.sh` currently provides a read-only preflight only.
+## Why it rewrites official archives
 
-## What's this?
+The macOS game has no mod-loading hook that can override resources owned by an
+official archive. A loose archive can add resources, but it cannot override an
+existing resource regardless of where it sorts:
 
-Cyberpunk 2077 does not load PC `.archive` mods on macOS. `archive-loader`
-temporarily patches the game's official Mac archives before launch, verifies the
-result, starts the game, and restores the original archives when the game exits.
+| Probe filename | Sort position | Override applied? |
+|---|---|---|
+| `0_probe_sasha.archive` | Before the official archives | No |
+| `basegame_99_probe_sasha.archive` | After the official archives | No |
 
-The project also runs REDscript compilation and Input Loader when those tools
-are installed.
+Those two launches established that in-place rewriting is the available
+override mechanism. The loader plans all enabled mods first, then rewrites each
+affected official archive once.
 
-## Compatibility
+## Install, launch, and recover
 
-| Feature | Support |
-|---|---|
-| `.archive` mods adding new resources | Yes |
-| `.archive` mods overriding game resources | Yes |
-| REDscript mods | Yes |
-| Input Loader | Yes |
-| ArchiveXL and `.archive.xl` | No |
-| TweakXL, CET, and RED4ext native plugins | No |
+1. Extract the `archive-loader/` folder into the Cyberpunk 2077 directory,
+   beside `Cyberpunk2077.app`.
+2. Run the setup script from the game directory:
 
-Tested with the GOG build, game version 2.3.1, on Apple Silicon. Other
-storefronts are detected, but have not received the same runtime testing.
+   ```bash
+   ./archive-loader/setup.sh
+   ```
 
-## Usage
+   Setup clears macOS quarantine when needed, handles a sibling folder left by
+   Archive Utility, captures a baseline of the official archives, and prints
+   the launch command.
+3. Put `.archive` mods in `archive-loader/mods/enabled/`.
+4. Run your existing launcher through the loader. For example:
 
-After installation, put `.archive` mods in:
+   ```bash
+   ./archive-loader/bin/archive-loader run -- ./launch_modded.sh
+   ```
 
-```text
-<game>/mods/enabled/
-```
+   Substitute the launcher you already use. The loader does not edit or replace
+   it, and the same wrapper works with `launch_red4ext.sh` or a launcher of your
+   own.
 
-Then launch through:
-
-```text
-<game>/launch_modded.sh
-```
-
-The game-root installer is still in development. You can safely inspect what it
-would do:
-
-```bash
-./install.sh --dry-run
-./install.sh --dry-run --game "/path/to/Cyberpunk 2077"
-```
-
-The preflight detects Steam, GOG, and Heroic installations, validates the game
-layout, and checks Apple Silicon, APFS, and directory permissions. It does not
-change any files.
-
-## Development setup
-
-The current source workflow requires a trusted pristine baseline. Do not test
-injection without one.
+If the game or Mac crashes while archives are patched, recover with:
 
 ```bash
-export ARCHIVE_LOADER_GAME_DIR="$(./bin/archive-loader detect)"
-./sync_gamefiles.sh
-./launch_modded.sh
+./archive-loader/bin/archive-loader restore
 ```
 
-Place archive mods in `enabled/`. Populate `pristine/content/` and
-`pristine/ep1/` from a verified clean installation before the first launch.
-
-The tracked RED4ext hooks and configuration are under `gamefiles/`. Third-party
-runtime versions and sources are listed in
-[`gamefiles/README.md`](gamefiles/README.md).
-
-## Patcher
-
-`bin/archive-loader` is the bundled arm64 release executable. Its Swift source and
-tests are under `patcher/`.
+Check the installation without taking the mutation lock:
 
 ```bash
-./bin/archive-loader detect
-./bin/archive-loader detect --all --format json
-./bin/archive-loader help
+./archive-loader/bin/archive-loader status
 ```
 
-To rebuild it:
+## What the baseline proves
+
+Before capture, setup asks you to run your storefront's verify/repair and
+refuses when it finds loader artifacts. The baseline records the captured
+archives, their sizes, and SHA-256 hashes so the loader can restore that exact
+generation and report later drift.
+
+It does not verify the archives against CDPR's originals. The official archive
+set differs by language packs and installed expansions, so that comparison
+cannot be complete for every installation. The negative-evidence gate instead
+establishes that nothing on this machine had patched the archives at capture
+time, and the recorded generation preserves what was captured.
+
+## Scope
+
+- Apple Silicon macOS only.
+- PC `.archive` mods only.
+- RED4ext, Frida, `scc`, and inputloader are neither installed nor managed by
+  this release. The loader composes with an existing setup for those tools by
+  wrapping its launcher.
+- The release does not ship third-party runtime files or anything under
+  `gamefiles/`.
+
+## Building from source
+
+Build and test the Swift package with:
 
 ```bash
 swift build -c release --package-path patcher
@@ -91,30 +89,23 @@ cp patcher/.build/release/archive-loader bin/archive-loader
 swift test --package-path patcher
 ```
 
-## Safety
-
-Patching rewrites official archives temporarily. The launcher restores the
-pristine baseline before every injection and again when the game exits. If a
-session is killed before cleanup, run `restore_archives.sh`; the next modded
-launch also restores first.
-
-Never commit game archives, pristine data, personal mods, or logs.
-
-## Contributing
-
-Run the checks relevant to your change:
+The shell tests are separate from `swift test`:
 
 ```bash
-bash -n launch_modded.sh inject_archives.sh restore_archives.sh sync_gamefiles.sh install.sh
-swift test --package-path patcher
-bash tests/install_dry_run_test.sh
-swift build -c release --package-path patcher && bash tests/restrict_section_test.sh
+for t in \
+    restrict_section setup_command rebaseline dyld_passthrough run_lifecycle \
+    restore_command status_command setup_sh release_assemble; do
+    bash "tests/${t}_test.sh"
+done
 ```
 
-The two `tests/` scripts run against temporary fixtures and never touch a game
-installation. `restrict_section_test.sh` is the only check that would notice the
-`__RESTRICT` linker flag in `patcher/Package.swift` going missing, so run it for
-any change to the package manifest.
+To assemble the versioned Apple Silicon release archive:
 
-Keep archive cleanup paths synchronized and preserve NUL-delimited, ASCII-sorted
-mod discovery.
+```bash
+./release/assemble.sh --version 0.1.0
+```
+
+It writes `build/archive-loader-0.1.0-macos-arm64.zip` after checking that the
+binary reports the requested version and contains the `__RESTRICT` linker
+segment. The zip contains immutable program files only; baselines, state, mods,
+and logs are created or retained in the game installation.
