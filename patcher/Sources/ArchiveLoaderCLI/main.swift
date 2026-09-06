@@ -13,7 +13,9 @@ enum CLIError: Error, CustomStringConvertible {
     }
 }
 
-@main
+/// Not `@main`: this file is named `main.swift`, so it is top-level code, and
+/// the attribute is illegal in a module that has any. The entry point is the
+/// call at the bottom of the file instead.
 struct ArchiveLoaderCLI {
     static func main() {
         do {
@@ -47,6 +49,8 @@ struct ArchiveLoaderCLI {
             try restore(args)
         case "prune":
             try prune(args)
+        case "setup":
+            try SetupCommand.run(args)
         case "version", "--version", "-v":
             print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
@@ -336,6 +340,7 @@ struct ArchiveLoaderCLI {
         archive-loader
 
         Commands:
+          setup [--game GAME_DIR] [--rebaseline] [--assume-clean]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
@@ -349,6 +354,8 @@ struct ArchiveLoaderCLI {
         """)
     }
 }
+
+ArchiveLoaderCLI.main()
 
 private struct DetectedGame: Encodable {
     let path: String
