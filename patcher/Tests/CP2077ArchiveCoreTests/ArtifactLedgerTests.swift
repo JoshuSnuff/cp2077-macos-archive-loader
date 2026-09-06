@@ -118,3 +118,31 @@ import Testing
     }
     #expect(try ledger.recorded() == nil)
 }
+
+@Test func aTamperedLedgerPathCannotDeleteOutsideTheGameRoot() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+    let outside = game.gameRoot.deletingLastPathComponent().appending(path: "outside.archive")
+    try Data("user-owned bytes".utf8).write(to: outside)
+
+    let ledger = ArtifactLedger(game: game.install)
+    try FileManager.default.createDirectory(
+        at: game.install.stateDirectory,
+        withIntermediateDirectories: true
+    )
+    let tampered = RecordedArtifacts(
+        recordedAt: "2026-09-06T00:00:00Z",
+        artifacts: [ArtifactRecord(
+            path: "../outside.archive",
+            sha256: try Hashes.sha256Hex(ofFileAt: outside)
+        )]
+    )
+    try JSONEncoder().encode(tampered).write(to: ledger.ledgerFile)
+
+    var skipped: [(URL, String)] = []
+    let removed = try ledger.removeRecorded(onSkipped: { skipped.append(($0, $1)) })
+
+    #expect(removed.isEmpty)
+    #expect(skipped.count == 1)
+    #expect(FileManager.default.fileExists(atPath: outside.path))
+}

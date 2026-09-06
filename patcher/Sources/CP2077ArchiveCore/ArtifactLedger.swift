@@ -84,7 +84,11 @@ public struct ArtifactLedger: Sendable {
 
         var removed: [URL] = []
         for artifact in recorded.artifacts {
-            let url = game.root.appending(path: artifact.path)
+            guard let url = recordedURL(for: artifact.path) else {
+                let attemptedURL = game.root.appending(path: artifact.path)
+                onSkipped(attemptedURL, "path is outside the game root")
+                continue
+            }
             guard manager.fileExists(atPath: url.path) else { continue }
 
             let current = try Hashes.sha256Hex(ofFileAt: url)
@@ -100,6 +104,19 @@ public struct ArtifactLedger: Sendable {
 
         try clear()
         return removed
+    }
+
+    private func recordedURL(for path: String) -> URL? {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return nil }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.contains(".."), !components.contains(".") else { return nil }
+
+        let root = game.root.normalizedFileURL
+        let url = root.appending(path: path, directoryHint: .notDirectory).normalizedFileURL
+        let rootPath = root.path
+        let descendantPrefix = rootPath == "/" ? "/" : rootPath + "/"
+        guard url.path.hasPrefix(descendantPrefix) else { return nil }
+        return url
     }
 
     public func clear() throws {
