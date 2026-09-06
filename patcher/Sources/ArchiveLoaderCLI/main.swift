@@ -14,7 +14,7 @@ enum CLIError: Error, CustomStringConvertible {
 }
 
 @main
-struct PatcherCLI {
+struct ArchiveLoaderCLI {
     static func main() {
         do {
             try run()
@@ -55,7 +55,7 @@ struct PatcherCLI {
     }
 
     static func scan(_ args: [String]) throws {
-        guard !args.isEmpty else { throw CLIError.usage("usage: patcher scan MOD.archive [...]") }
+        guard !args.isEmpty else { throw CLIError.usage("usage: archive-loader scan MOD.archive [...]") }
         for arg in args {
             let url = URL(fileURLWithPath: arg)
             let scan = try ModScanner.scan(url: url)
@@ -137,7 +137,7 @@ struct PatcherCLI {
     static func verify(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: patcher verify --game GAME_DIR [--mods MOD.archive [...]]")
+            throw CLIError.usage("usage: archive-loader verify --game GAME_DIR [--mods MOD.archive [...]]")
         }
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
 
@@ -182,11 +182,11 @@ struct PatcherCLI {
     static func patch(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
         let modPaths = options.values(after: "--mods")
         guard !modPaths.isEmpty else {
-            throw CLIError.usage("usage: patcher patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
@@ -252,7 +252,7 @@ struct PatcherCLI {
               let targetPath = options.value("--target")
         else {
             throw CLIError.usage(
-                "usage: patcher patch-hashes --game GAME_DIR --source MOD.archive --target TARGET.archive --hashes HEX [...]"
+                "usage: archive-loader patch-hashes --game GAME_DIR --source MOD.archive --target TARGET.archive --hashes HEX [...]"
             )
         }
 
@@ -290,7 +290,7 @@ struct PatcherCLI {
     static func restore(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: patcher restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
+            throw CLIError.usage("usage: archive-loader restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
         }
         let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
         if let backupPath = options.value("--backup") {
@@ -307,7 +307,7 @@ struct PatcherCLI {
     static func prune(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: patcher prune --game GAME_DIR [--keep N] [--dry-run]")
+            throw CLIError.usage("usage: archive-loader prune --game GAME_DIR [--keep N] [--dry-run]")
         }
         let dryRun = args.contains("--dry-run")
         let keep = try retentionCount(options.value("--keep"))
@@ -331,7 +331,7 @@ struct PatcherCLI {
 
     static func printUsage() {
         print("""
-        patcher
+        archive-loader
 
         Commands:
           scan MOD.archive [...]

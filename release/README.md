@@ -3,7 +3,7 @@
 This directory defines the on-disk shape assembled into an `archive-loader`
 release. It is not an installed runtime and contains no mutable game data.
 
-The release build copies `bin/patcher` into
+The release build copies `bin/archive-loader` into
 `payload/archive-loader/bin/`, the runtime scripts into
 `payload/archive-loader/scripts/`, and managed runtime files into
 `payload/archive-loader/gamefiles/`. Supported-build manifests will live under

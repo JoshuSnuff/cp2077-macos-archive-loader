@@ -60,7 +60,7 @@ The current source workflow requires a trusted pristine baseline. Do not test
 injection without one.
 
 ```bash
-export ARCHIVE_LOADER_GAME_DIR="$(./bin/patcher detect)"
+export ARCHIVE_LOADER_GAME_DIR="$(./bin/archive-loader detect)"
 ./sync_gamefiles.sh
 ./launch_modded.sh
 ```
@@ -74,20 +74,20 @@ runtime versions and sources are listed in
 
 ## Patcher
 
-`bin/patcher` is the bundled arm64 release executable. Its Swift source and
+`bin/archive-loader` is the bundled arm64 release executable. Its Swift source and
 tests are under `patcher/`.
 
 ```bash
-./bin/patcher detect
-./bin/patcher detect --all --format json
-./bin/patcher help
+./bin/archive-loader detect
+./bin/archive-loader detect --all --format json
+./bin/archive-loader help
 ```
 
 To rebuild it:
 
 ```bash
 swift build -c release --package-path patcher
-cp patcher/.build/release/patcher bin/patcher
+cp patcher/.build/release/archive-loader bin/archive-loader
 swift test --package-path patcher
 ```
 

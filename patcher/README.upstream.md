@@ -83,13 +83,13 @@ The GUI is the recommended interface, but the repo also includes a CLI for testi
 Scan one or more mod archives:
 
 ```sh
-.build/debug/cp2077-patcher scan /path/to/mod.archive
+.build/debug/archive-loader scan /path/to/mod.archive
 ```
 
 Verify the Mac game archives:
 
 ```sh
-.build/debug/cp2077-patcher verify \
+.build/debug/archive-loader verify \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077"
 ```
 
@@ -97,7 +97,7 @@ Patch mods with the default hybrid strategy. Completed backup runs retain the
 newest three by default; pass `--keep N` to choose another count:
 
 ```sh
-.build/debug/cp2077-patcher patch \
+.build/debug/archive-loader patch \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
   --mods /path/to/mod1.archive /path/to/mod2.archive
 ```
@@ -105,7 +105,7 @@ newest three by default; pass `--keep N` to choose another count:
 Aggressive fallback mode patches the whole source archive into one target archive. This mutates official game archives more heavily and should only be used when hybrid mode cannot support a mod:
 
 ```sh
-.build/debug/cp2077-patcher patch \
+.build/debug/archive-loader patch \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
   --strategy aggressive \
   --target "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077/archive/Mac/content/basegame_4_appearance.archive" \
@@ -116,7 +116,7 @@ Restore every archive from the latest backup run. If that run is incomplete,
 the command refuses without changing any archive:
 
 ```sh
-.build/debug/cp2077-patcher restore \
+.build/debug/archive-loader restore \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
   --latest
 ```
@@ -124,7 +124,7 @@ the command refuses without changing any archive:
 Restore a specific run, or one archive directory within a run:
 
 ```sh
-.build/debug/cp2077-patcher restore \
+.build/debug/archive-loader restore \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
   --backup "/path/to/Cyberpunk 2077/archive/Mac/_patcher/backups/run-id"
 ```
@@ -132,7 +132,7 @@ Restore a specific run, or one archive directory within a run:
 Preview or perform standalone pruning:
 
 ```sh
-.build/debug/cp2077-patcher prune \
+.build/debug/archive-loader prune \
   --game "/Users/me/Library/Application Support/Steam/steamapps/common/Cyberpunk 2077" \
   --keep 3 --dry-run
 ```

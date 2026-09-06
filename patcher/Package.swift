@@ -4,12 +4,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "patcher",
+    name: "archive-loader",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "patcher", targets: ["patcher"]),
+        .executable(name: "archive-loader", targets: ["archive-loader"]),
         .library(name: "CP2077ArchiveCore", targets: ["CP2077ArchiveCore"]),
     ],
     targets: [
@@ -17,9 +17,9 @@ let package = Package(
             name: "CP2077ArchiveCore"
         ),
         .executableTarget(
-            name: "patcher",
+            name: "archive-loader",
             dependencies: ["CP2077ArchiveCore"],
-            path: "Sources/PatcherCLI"
+            path: "Sources/ArchiveLoaderCLI"
         ),
         .testTarget(
             name: "CP2077ArchiveCoreTests",

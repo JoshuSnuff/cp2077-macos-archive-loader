@@ -55,8 +55,8 @@ if [ -e "$OUTPUT_DIR" ]; then
     echo "ERROR: output already exists: $OUTPUT_DIR" >&2
     exit 1
 fi
-if [ ! -x "$REPOSITORY_DIR/bin/patcher" ]; then
-    echo "ERROR: missing executable: $REPOSITORY_DIR/bin/patcher" >&2
+if [ ! -x "$REPOSITORY_DIR/bin/archive-loader" ]; then
+    echo "ERROR: missing executable: $REPOSITORY_DIR/bin/archive-loader" >&2
     exit 1
 fi
 
@@ -78,7 +78,7 @@ mkdir -p \
 cp "$REPOSITORY_DIR/install.sh" "$STAGING_DIR/install.sh"
 cp "$REPOSITORY_DIR/release/README.md" "$STAGING_DIR/README.txt"
 cp "$REPOSITORY_DIR/release/payload/archive-loader/README.md" "$PAYLOAD_DIR/README.md"
-cp "$REPOSITORY_DIR/bin/patcher" "$PAYLOAD_DIR/bin/patcher"
+cp "$REPOSITORY_DIR/bin/archive-loader" "$PAYLOAD_DIR/bin/archive-loader"
 
 mv "$STAGING_DIR" "$OUTPUT_DIR"
 echo "$OUTPUT_DIR"

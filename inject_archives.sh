@@ -13,7 +13,7 @@ if [ -z "$GAME_DIR" ]; then
 fi
 PRISTINE_DIR="$SCRIPT_DIR/pristine"
 ENABLED_DIR="$SCRIPT_DIR/enabled"
-PATCHER="$SCRIPT_DIR/bin/patcher"
+PATCHER="$SCRIPT_DIR/bin/archive-loader"
 LOG_DIR="$SCRIPT_DIR/logs"
 
 mkdir -p "$LOG_DIR"

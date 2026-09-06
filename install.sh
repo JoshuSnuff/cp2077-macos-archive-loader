@@ -50,9 +50,9 @@ fi
 
 PATCHER=""
 for candidate in \
-    "$SCRIPT_DIR/bin/patcher" \
-    "$SCRIPT_DIR/payload/archive-loader/bin/patcher" \
-    "$SCRIPT_DIR/release/payload/archive-loader/bin/patcher"; do
+    "$SCRIPT_DIR/bin/archive-loader" \
+    "$SCRIPT_DIR/payload/archive-loader/bin/archive-loader" \
+    "$SCRIPT_DIR/release/payload/archive-loader/bin/archive-loader"; do
     if [ -x "$candidate" ]; then
         PATCHER="$candidate"
         break
@@ -60,7 +60,7 @@ for candidate in \
 done
 
 if [ -z "$PATCHER" ]; then
-    echo "ERROR: patcher executable was not found in the source or release payload" >&2
+    echo "ERROR: archive-loader executable was not found in the source or release payload" >&2
     exit 1
 fi
 
