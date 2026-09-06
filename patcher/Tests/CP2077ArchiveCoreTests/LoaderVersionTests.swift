@@ -2,9 +2,9 @@ import CP2077ArchiveCore
 import Testing
 
 @Test func loaderVersionIsThreeNumericComponents() {
-    // setup writes this into baseline.json and assemble.sh cross-checks the
-    // staged `version` file against it, so "0.1" or "v0.1.0" would break a
-    // release rather than merely read oddly.
+    // assemble.sh compares its --version argument against what the binary
+    // prints, so "0.1" or "v0.1.0" would break a release rather than merely
+    // read oddly.
     let components = LoaderVersion.components
     #expect(components != nil, "LoaderVersion.current must be MAJOR.MINOR.PATCH")
     #expect(components?.major == 0)

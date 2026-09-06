@@ -1,8 +1,8 @@
 /// The one place the loader's version is written down.
 ///
-/// `setup` records it in `baseline.json`, `--version` prints it, and the
-/// release assembly cross-checks the `version` file it stages against it, so a
-/// hand-typed release version cannot silently disagree with the shipped binary.
+/// `--version` prints it, and `release/assemble.sh` refuses to assemble a
+/// release whose `--version` argument disagrees with what the binary reports,
+/// so a hand-typed release cannot silently ship under the wrong name.
 public enum LoaderVersion {
     public static let current = "0.1.0"
 

@@ -34,13 +34,9 @@ restore_pristine() {
     find "$GAME_DIR/archive/Mac/content" -name "basegame_99_*" -type f -delete 2>/dev/null || true
     find "$GAME_DIR/archive/Mac/ep1" -name "basegame_99_*" -type f -delete 2>/dev/null || true
     rm -rf "$GAME_DIR/archive/Mac/mod" 2>/dev/null || true
-    for backup_dir in \
-        "$GAME_DIR/archive-loader/backups" \
-        "$GAME_DIR/archive/Mac/_patcher" \
-        "$GAME_DIR/archive/Mac/_cp2077_mac_patcher"; do
-        [ -d "$backup_dir" ] || continue
-        find "$backup_dir" -type d -empty -delete 2>/dev/null || true
-    done
+    # Patcher backups are deliberately left alone here: this runs mid-session,
+    # and the current run's backups are the only way back from a failed patch.
+    # restore_archives.sh clears them once the session is over.
     log "Restored $count changed archives"
 }
 

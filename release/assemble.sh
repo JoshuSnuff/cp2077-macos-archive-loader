@@ -60,6 +60,17 @@ if [ ! -x "$REPOSITORY_DIR/bin/archive-loader" ]; then
     exit 1
 fi
 
+# --version is hand-typed here but compiled into the binary, and once the
+# directory leaves this machine nothing else records which build it holds. A
+# mislabelled release is indistinguishable from a correct one, so refuse rather
+# than name the payload after a version it does not report.
+BINARY_VERSION="$("$REPOSITORY_DIR/bin/archive-loader" --version)"
+if [ "$BINARY_VERSION" != "archive-loader $VERSION" ]; then
+    echo "ERROR: --version $VERSION disagrees with the binary, which reports: $BINARY_VERSION" >&2
+    echo "  rebuild bin/archive-loader, or pass the version it was built with" >&2
+    exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
 STAGING_ROOT="$(mktemp -d "$BUILD_DIR/.archive-loader-release.XXXXXX")"
 clean_up() {

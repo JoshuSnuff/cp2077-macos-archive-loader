@@ -107,7 +107,14 @@ Run the checks relevant to your change:
 ```bash
 bash -n launch_modded.sh inject_archives.sh restore_archives.sh sync_gamefiles.sh install.sh
 swift test --package-path patcher
+bash tests/install_dry_run_test.sh
+swift build -c release --package-path patcher && bash tests/restrict_section_test.sh
 ```
+
+The two `tests/` scripts run against temporary fixtures and never touch a game
+installation. `restrict_section_test.sh` is the only check that would notice the
+`__RESTRICT` linker flag in `patcher/Package.swift` going missing, so run it for
+any change to the package manifest.
 
 Keep archive cleanup paths synchronized and preserve NUL-delimited, ASCII-sorted
 mod discovery.

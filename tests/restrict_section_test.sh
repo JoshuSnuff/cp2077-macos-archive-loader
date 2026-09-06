@@ -103,13 +103,15 @@ if [ -f "$LOADER_MARKER" ]; then
     fail "the probe dylib loaded into archive-loader; __RESTRICT is not taking effect"
 fi
 
-cat > "$WORK_DIR/expected-version.txt" <<'EXPECTED_VERSION'
-archive-loader 0.1.0
-EXPECTED_VERSION
-if ! cmp -s "$WORK_DIR/expected-version.txt" "$WORK_DIR/version.txt"; then
+# Shape, not value: this checks that stdout is the version line and nothing
+# else, which is what proves no injected dylib wrote to it. Pinning the number
+# here would make LoaderVersion.swift and this file two copies of the version
+# that have to be bumped in lockstep, with nothing cross-referencing them.
+if [ "$(wc -l < "$WORK_DIR/version.txt")" -ne 1 ] \
+    || ! grep -Eq '^archive-loader [0-9]+\.[0-9]+\.[0-9]+$' "$WORK_DIR/version.txt"; then
     echo "--- archive-loader stdout ---" >&2
     cat "$WORK_DIR/version.txt" >&2
-    fail "archive-loader --version output was not exactly one line: archive-loader 0.1.0"
+    fail "archive-loader --version output was not exactly one 'archive-loader MAJOR.MINOR.PATCH' line"
 fi
 
 echo "restrict section test passed"
