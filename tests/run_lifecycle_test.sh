@@ -69,6 +69,35 @@ elapsed=$(( $(date +%s) - began ))
 [ "$elapsed" -ge 3 ] \
     || fail "run returned after ${elapsed}s; it did not wait for the backgrounded game"
 
+# --- SIGTERM during the surviving game wait still restores ------------------
+make_game
+cat > "$GAME_DIR/early_term.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+printf 'mutated-during-session' > "$(dirname "$0")/archive/Mac/content/basegame_1_engine.archive"
+"$(dirname "$0")/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" &
+exit 0
+LAUNCHER
+chmod +x "$GAME_DIR/early_term.sh"
+
+began=$(date +%s)
+ARCHIVE_LOADER_FAKE_SLEEP=3 ARCHIVE_LOADER_FAKE_IGNORE_TERM=1 \
+    "$BINARY" run --game "$GAME_DIR" -- ./early_term.sh > /dev/null 2>&1 &
+runner=$!
+sleep 1.5
+kill -TERM "$runner"
+set +e
+wait "$runner"
+code=$?
+set -e
+[ "$code" -eq 143 ] || fail "SIGTERM during game wait exited $code, expected 143"
+elapsed=$(( $(date +%s) - began ))
+[ "$elapsed" -ge 3 ] \
+    || fail "SIGTERM returned after ${elapsed}s; it killed the wrapper before cleanup"
+pgrep -f "$GAME_DIR/Cyberpunk2077.app" > /dev/null \
+    && fail "SIGTERM during game wait left the game running"
+[ "$(cat "$CONTENT")" = "vanilla-bytes" ] \
+    || fail "SIGTERM during game wait did not restore the baseline"
+
 # --- A game already running is refused before anything is touched -----------
 make_game
 ARCHIVE_LOADER_FAKE_SLEEP=5 "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" &
@@ -150,7 +179,7 @@ set -e
 
 # 130 = 128 + SIGINT. The signal must reach the child rather than killing the
 # wrapper and orphaning a patched install.
-[ "$code" -eq 130 ] || echo "note: SIGINT run exited $code (expected 130)"
+[ "$code" -eq 130 ] || fail "SIGINT run exited $code, expected 130"
 [ "$(cat "$CONTENT")" = "vanilla-bytes" ] \
     || fail "Ctrl-C left the install patched"
 pgrep -f "$GAME_DIR/Cyberpunk2077.app" > /dev/null \
@@ -207,5 +236,7 @@ case "$output" in
     *"Recover with"*) ;;
     *) fail "no recovery command was printed: $output" ;;
 esac
+printf '%s\n' "$output" | rg -q "cd '.*/Cyberpunk 2077'" \
+    || fail "the recovery command did not quote the game path: $output"
 
 echo "run lifecycle test passed"

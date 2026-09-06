@@ -112,6 +112,12 @@ enum RunCommand {
                 let patchError = error
                 // Patch and verification can fail after writing some files.
                 // Recover before surfacing either failure or falling back.
+                do {
+                    try recordExistingManagedArtifact(game: game, ledger: ledger)
+                } catch {
+                    reportRestoreFailure(error, game: game)
+                    exit(restoreFailureExitCode)
+                }
                 if let restoreError = restoreQuietly(store: store, ledger: ledger) {
                     reportRestoreFailure(restoreError, game: game)
                     exit(restoreFailureExitCode)
@@ -143,14 +149,28 @@ enum RunCommand {
         watcher.start()
         defer { watcher.stop() }
 
+        let gameExecutable = GameProcess.executable(in: game)
+        let launcherTarget = LockedProcessTarget()
+        let signalForwarder = SignalForwarder {
+            if let launcherPID = launcherTarget.value {
+                return [launcherPID]
+            }
+            return GameProcess.runningPIDs(matching: gameExecutable)
+        }
+        signalForwarder.start()
+        defer { signalForwarder.stop() }
+
         do {
             outcome = try LaunchSupervisor.run(
                 executable: launcher,
                 arguments: launcherArguments,
-                workingDirectory: game.root
+                workingDirectory: game.root,
+                onStarted: { launcherTarget.value = $0 },
+                signalForwarder: signalForwarder
             )
         } catch {
             // Even a launcher that never started leaves a patched install.
+            launcherTarget.value = nil
             if let restoreError = restoreQuietly(store: store, ledger: ledger) {
                 reportRestoreFailure(restoreError, game: game)
                 exit(restoreFailureExitCode)
@@ -158,11 +178,14 @@ enum RunCommand {
             throw error
         }
 
+        launcherTarget.value = nil
         waitForGameToFinish(game: game, watcher: watcher)
         watcher.stop()
         let restoreError = restoreQuietly(store: store, ledger: ledger)
 
-        let launcherCode = outcome.reportableCode
+        let launcherCode = outcome.wasSignalled
+            ? outcome.reportableCode
+            : signalForwarder.receivedSignal.map { 128 + $0 } ?? outcome.reportableCode
         if let restoreError {
             reportRestoreFailure(restoreError, game: game, launcherCode: launcherCode)
             exit(restoreFailureExitCode)
@@ -263,6 +286,12 @@ enum RunCommand {
         }
     }
 
+    static func recordExistingManagedArtifact(game: GameInstall, ledger: ArtifactLedger) throws {
+        let artifact = game.managedLooseArchive
+        guard FileManager.default.fileExists(atPath: artifact.path) else { return }
+        try ledger.record([artifact])
+    }
+
     static func reportRestoreFailure(_ error: Error, game: GameInstall, launcherCode: Int32 = 0) {
         fputs("\n", stderr)
         // Deliberately not "the install is patched": with zero mods nothing was
@@ -276,8 +305,30 @@ enum RunCommand {
         }
         fputs("\n", stderr)
         fputs("Recover with:\n", stderr)
-        fputs("  cd \(game.root.path)\n", stderr)
+        fputs("  cd \(shellQuote(game.root.path))\n", stderr)
         fputs("  ./archive-loader/bin/archive-loader run -- /usr/bin/true\n", stderr)
         fputs("\n", stderr)
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
+private final class LockedProcessTarget: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var pid: pid_t?
+
+    var value: pid_t? {
+        get {
+            mutex.lock()
+            defer { mutex.unlock() }
+            return pid
+        }
+        set {
+            mutex.lock()
+            pid = newValue
+            mutex.unlock()
+        }
     }
 }

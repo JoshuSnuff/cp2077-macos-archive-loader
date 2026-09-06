@@ -47,7 +47,8 @@ public enum LaunchSupervisor {
         executable: URL,
         arguments: [String],
         workingDirectory: URL,
-        onStarted: (pid_t) -> Void = { _ in }
+        onStarted: (pid_t) -> Void = { _ in },
+        signalForwarder: SignalForwarder? = nil
     ) throws -> LaunchOutcome {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw LaunchError.notExecutable(executable)
@@ -66,8 +67,22 @@ public enum LaunchSupervisor {
         }
         onStarted(process.processIdentifier)
 
-        let forwarding = ForwardedSignals(to: process.processIdentifier)
-        defer { forwarding.stop() }
+        let forwarding: SignalForwarder
+        let ownsForwarding: Bool
+        if let signalForwarder {
+            forwarding = signalForwarder
+            forwarding.start()
+            ownsForwarding = false
+        } else {
+            forwarding = SignalForwarder(targets: { [process.processIdentifier] })
+            forwarding.start()
+            ownsForwarding = true
+        }
+        defer {
+            if ownsForwarding {
+                forwarding.stop()
+            }
+        }
 
         process.waitUntilExit()
 
@@ -78,15 +93,40 @@ public enum LaunchSupervisor {
     }
 }
 
-/// Forwards SIGINT and SIGTERM to the child for as long as it runs.
+/// Forwards SIGINT and SIGTERM to the current lifecycle target.
 ///
-/// A Ctrl-C must end the game and let this process reach its restore, not
-/// kill the wrapper and orphan a patched install.
-private final class ForwardedSignals {
-    private let sources: [DispatchSourceSignal]
-    private let previous: [(Int32, sig_t?)]
+/// The target provider is evaluated when a signal arrives, so a caller can
+/// keep the wrapper protected while ownership moves from the launcher to a
+/// surviving game process and then through restoration.
+public final class SignalForwarder: @unchecked Sendable {
+    private let targets: @Sendable () -> [pid_t]
+    private let mutex = NSLock()
+    private var sources: [DispatchSourceSignal] = []
+    private var previous: [(Int32, sig_t?)] = []
+    private var signalNumber: Int32?
+    private var started = false
 
-    init(to pid: pid_t) {
+    public init(targets: @escaping @Sendable () -> [pid_t]) {
+        self.targets = targets
+    }
+
+    public convenience init(to pid: pid_t) {
+        self.init(targets: { [pid] })
+    }
+
+    public var receivedSignal: Int32? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return signalNumber
+    }
+
+    public func start() {
+        mutex.lock()
+        guard !started else {
+            mutex.unlock()
+            return
+        }
+        started = true
         var sources: [DispatchSourceSignal] = []
         var previous: [(Int32, sig_t?)] = []
         let queue = DispatchQueue(label: "archive-loader.signals")
@@ -96,8 +136,8 @@ private final class ForwardedSignals {
             // observe the signal.
             previous.append((number, signal(number, SIG_IGN)))
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
-            source.setEventHandler {
-                kill(pid, number)
+            source.setEventHandler { [weak self] in
+                self?.forward(number)
             }
             source.resume()
             sources.append(source)
@@ -105,12 +145,37 @@ private final class ForwardedSignals {
 
         self.sources = sources
         self.previous = previous
+        mutex.unlock()
     }
 
-    func stop() {
+    public func stop() {
+        mutex.lock()
+        guard started else {
+            mutex.unlock()
+            return
+        }
+        started = false
+        let sources = self.sources
+        let previous = self.previous
+        self.sources.removeAll()
+        self.previous.removeAll()
+        mutex.unlock()
+
         for source in sources { source.cancel() }
         for (number, handler) in previous {
             signal(number, handler ?? SIG_DFL)
+        }
+    }
+
+    private func forward(_ number: Int32) {
+        mutex.lock()
+        if signalNumber == nil {
+            signalNumber = number
+        }
+        mutex.unlock()
+
+        for pid in targets() where pid > 0 {
+            kill(pid, number)
         }
     }
 }
