@@ -51,6 +51,8 @@ struct ArchiveLoaderCLI {
             try prune(args)
         case "setup":
             try SetupCommand.run(args)
+        case "run":
+            try RunCommand.run(args)
         case "version", "--version", "-v":
             print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
@@ -341,6 +343,7 @@ struct ArchiveLoaderCLI {
 
         Commands:
           setup [--game GAME_DIR] [--rebaseline] [--assume-clean]
+          run [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
