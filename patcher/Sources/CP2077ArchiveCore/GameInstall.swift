@@ -20,6 +20,41 @@ public struct GameInstall: Sendable {
         InstalledLayout.loaderDirectory(inGameRoot: root)
     }
 
+    /// Captured baseline generations. Each subdirectory is one generation.
+    public var baselinesDirectory: URL {
+        loaderDirectory.appending(path: "baselines", directoryHint: .isDirectory)
+    }
+
+    /// Symlink to the published generation. Switching it is the single commit
+    /// point of a capture, which is why it is a link and not a copy.
+    ///
+    /// Deliberately not hinted as a directory: the path is handed to
+    /// `rename(2)` and `symlink(2)`, which want the link itself, not its target.
+    public var pristinePointer: URL {
+        loaderDirectory.appending(path: "pristine", directoryHint: .notDirectory)
+    }
+
+    /// Lock and recorded-artifact state.
+    public var stateDirectory: URL {
+        loaderDirectory.appending(path: "state", directoryHint: .isDirectory)
+    }
+
+    public var logsDirectory: URL {
+        loaderDirectory.appending(path: "logs", directoryHint: .isDirectory)
+    }
+
+    /// Where the user drops `.archive` mods. Read in place; never copied into
+    /// the game's own archive tree.
+    public var modsEnabledDirectory: URL {
+        loaderDirectory.appending(path: "mods/enabled", directoryHint: .isDirectory)
+    }
+
+    /// Windows' mod staging directory. 0.1 never creates it and never deletes
+    /// it; its presence is evidence that something else patched this install.
+    public var modStagingDirectory: URL {
+        root.appending(path: "archive/Mac/mod", directoryHint: .isDirectory)
+    }
+
     /// Per-run patcher backups.
     ///
     /// These lived under `archive/Mac/_patcher/backups/` before 0.1. Moving
