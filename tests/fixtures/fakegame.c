@@ -2,11 +2,15 @@
    (default 0) and exits with ARCHIVE_LOADER_FAKE_EXIT (default 0), so one
    binary covers clean exit, failure, and a session long enough to signal. */
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
 
 int main(void) {
     const char *sleep_for = getenv("ARCHIVE_LOADER_FAKE_SLEEP");
     const char *exit_with = getenv("ARCHIVE_LOADER_FAKE_EXIT");
+    if (getenv("ARCHIVE_LOADER_FAKE_IGNORE_TERM") != NULL) {
+        signal(SIGTERM, SIG_IGN);
+    }
     if (sleep_for != NULL) {
         sleep((unsigned int)atoi(sleep_for));
     }
