@@ -248,6 +248,48 @@ import Testing
     #expect(manifest.planSummary.conflicts == 1)
 }
 
+@Test func backupsLiveInTheLoaderDirectoryNotTheArchiveTree() throws {
+    let game = GameInstall(root: URL(fileURLWithPath: "/games/Cyberpunk 2077", isDirectory: true))
+
+    #expect(game.loaderDirectory.path == "/games/Cyberpunk 2077/archive-loader")
+    #expect(game.backupDirectory.path == "/games/Cyberpunk 2077/archive-loader/backups")
+    // Phase 2's negative-evidence gate reads a directory inside archive/Mac as
+    // proof of a pre-0.1 session. That inference is only sound while 0.1 writes
+    // nothing there itself.
+    #expect(!game.backupDirectory.path.contains("/archive/Mac/"))
+    #expect(
+        game.legacyPatcherDirectories.map(\.lastPathComponent)
+            == ["_patcher", "_cp2077_mac_patcher"]
+    )
+}
+
+@Test func aBackupRunLandsOutsideTheArchiveDirectories() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+
+    _ = try game.writeOfficial("basegame_1_stock.archive", records: [
+        TestRecord(hash: 0x9001, payload: Data("stock".utf8))
+    ])
+
+    let store = BackupStore(game: game.install)
+    let run = try store.beginRun(plan: emptyPlan())
+    _ = try run.backup(targetArchive: game.contentDirectory.appending(path: "basegame_1_stock.archive"))
+    try run.complete()
+
+    // Both sides are normalized because beginRun normalizes the directory it
+    // returns while GameInstall keeps the caller's spelling, and the fixture
+    // root sits under /var, which resolves to /private/var. The existing
+    // BackupStoreTests carry the same workaround at :257-261.
+    #expect(
+        run.directory.normalizedFileURL.path
+            .hasPrefix(game.install.loaderDirectory.normalizedFileURL.path)
+    )
+    // macArchives enumerates archive/Mac only, so a backup copy of an official
+    // archive can no longer be mistaken for an official archive.
+    let enumerated = try game.install.macArchives().map(\.lastPathComponent)
+    #expect(enumerated == ["basegame_1_stock.archive"])
+}
+
 private func emptyPlan() -> PatchPlan {
     PatchPlan(winners: [:], officialWork: [:], newResources: [], losers: [])
 }

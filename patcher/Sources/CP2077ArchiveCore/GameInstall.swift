@@ -15,12 +15,29 @@ public struct GameInstall: Sendable {
         root.appending(path: "archive/Mac/ep1", directoryHint: .isDirectory)
     }
 
-    public var patcherDirectory: URL {
-        root.appending(path: "archive/Mac/_patcher", directoryHint: .isDirectory)
+    /// The single directory the loader owns inside a game installation.
+    public var loaderDirectory: URL {
+        InstalledLayout.loaderDirectory(inGameRoot: root)
     }
 
+    /// Per-run patcher backups.
+    ///
+    /// These lived under `archive/Mac/_patcher/backups/` before 0.1. Moving
+    /// them out is what lets the negative-evidence gate read anything inside
+    /// `archive/Mac/` as somebody else's work, or our own from before 0.1.
     public var backupDirectory: URL {
-        patcherDirectory.appending(path: "backups", directoryHint: .isDirectory)
+        loaderDirectory.appending(path: "backups", directoryHint: .isDirectory)
+    }
+
+    /// Backup directories written by pre-0.1 sessions, newest naming first.
+    ///
+    /// Recognised so the gate can refuse on them and an explicit cleanup can
+    /// remove them. Never written to.
+    public var legacyPatcherDirectories: [URL] {
+        [
+            root.appending(path: "archive/Mac/_patcher", directoryHint: .isDirectory),
+            root.appending(path: "archive/Mac/_cp2077_mac_patcher", directoryHint: .isDirectory),
+        ]
     }
 
     public var managedLooseArchiveDirectory: URL {

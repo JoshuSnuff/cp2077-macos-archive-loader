@@ -42,9 +42,13 @@ if [ -d "$GAME_DIR/archive/Mac/mod" ]; then
     rmdir "$GAME_DIR/archive/Mac/mod" 2>/dev/null || true
 fi
 
-# Clear patcher backups created during this session. The second path is a
-# narrowly scoped cleanup for installations made before the executable rename.
-for backup_dir in "$GAME_DIR/archive/Mac/_patcher" "$GAME_DIR/archive/Mac/_cp2077_mac_patcher"; do
+# Clear patcher backups created during this session. archive-loader/backups is
+# where 0.1 writes them; the archive/Mac paths are pre-0.1 locations, cleaned
+# here so an install that predates the move does not keep them forever.
+for backup_dir in \
+    "$GAME_DIR/archive-loader/backups" \
+    "$GAME_DIR/archive/Mac/_patcher" \
+    "$GAME_DIR/archive/Mac/_cp2077_mac_patcher"; do
     if [ -d "$backup_dir" ]; then
         find "$backup_dir" -type f -delete 2>/dev/null || true
         find "$backup_dir" -type d -empty -delete 2>/dev/null || true
