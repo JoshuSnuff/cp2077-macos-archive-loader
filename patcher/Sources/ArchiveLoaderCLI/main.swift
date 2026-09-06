@@ -47,6 +47,8 @@ struct ArchiveLoaderCLI {
             try restore(args)
         case "prune":
             try prune(args)
+        case "version", "--version", "-v":
+            print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
             printUsage()
         default:
@@ -340,6 +342,7 @@ struct ArchiveLoaderCLI {
           patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
           restore --game GAME_DIR [--backup RUN_OR_ARCHIVE_DIR | --latest]
           prune --game GAME_DIR [--keep N] [--dry-run]
+          --version
 
         Scope:
           Native macOS Cyberpunk 2077, archive-only PC .archive mods.
