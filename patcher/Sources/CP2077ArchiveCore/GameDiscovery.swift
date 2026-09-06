@@ -108,6 +108,7 @@ public enum GameDiscovery {
     public static func resolve(
         explicitRoot: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        installedExecutable: URL? = InstalledLayout.currentExecutable(),
         locations: GameDiscoveryLocations = .system(),
         fileManager: FileManager = .default
     ) throws -> [GameCandidate] {
@@ -121,6 +122,18 @@ public enum GameDiscovery {
                 sources: ["environment"],
                 fileManager: fileManager
             )]
+        }
+
+        // An installed binary already knows where the game is. A development
+        // build does not live inside one, so failing here is the expected case
+        // and must fall through to discovery rather than abort.
+        if let installedExecutable,
+           let candidate = try? validate(
+               root: InstalledLayout.gameRoot(forExecutable: installedExecutable),
+               sources: ["installed"],
+               fileManager: fileManager
+           ) {
+            return [candidate]
         }
 
         return discover(locations: locations, fileManager: fileManager)

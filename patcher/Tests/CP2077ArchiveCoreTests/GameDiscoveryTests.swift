@@ -189,10 +189,12 @@ private struct DiscoveryFixture {
     let explicitResult = try GameDiscovery.resolve(
         explicitRoot: explicit.appending(path: "Cyberpunk2077.app", directoryHint: .isDirectory),
         environment: ["ARCHIVE_LOADER_GAME_DIR": environment.path],
+        installedExecutable: nil,
         locations: fixture.locations(conventional: [environment])
     )
     let environmentResult = try GameDiscovery.resolve(
         environment: ["ARCHIVE_LOADER_GAME_DIR": environment.path],
+        installedExecutable: nil,
         locations: fixture.locations(conventional: [explicit])
     )
 
@@ -200,4 +202,86 @@ private struct DiscoveryFixture {
     #expect(explicitResult[0].sources == ["explicit"])
     #expect(environmentResult.map(\.root) == [environment])
     #expect(environmentResult[0].sources == ["environment"])
+}
+
+@Test func gameRootIsTwoDirectoriesAboveTheInstalledBinary() {
+    let executable = URL(fileURLWithPath: "/games/Cyberpunk 2077/archive-loader/bin/archive-loader")
+
+    #expect(
+        InstalledLayout.gameRoot(forExecutable: executable).path
+            == "/games/Cyberpunk 2077"
+    )
+}
+
+@Test func installedBinaryResolvesItsOwnGameRoot() throws {
+    let fixture = try DiscoveryFixture()
+    defer { fixture.cleanUp() }
+    let game = try fixture.makeGame(at: fixture.root.appending(path: "Installed Game", directoryHint: .isDirectory))
+    let executable = game.appending(path: "archive-loader/bin/archive-loader")
+    try FileManager.default.createDirectory(
+        at: executable.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("fixture binary".utf8).write(to: executable)
+
+    let resolved = try GameDiscovery.resolve(
+        environment: [:],
+        installedExecutable: executable,
+        locations: fixture.locations()
+    )
+
+    #expect(resolved.map(\.root) == [game])
+    #expect(resolved[0].sources == ["installed"])
+}
+
+@Test func explicitAndEnvironmentOutrankTheInstalledLocation() throws {
+    let fixture = try DiscoveryFixture()
+    defer { fixture.cleanUp() }
+    let explicit = try fixture.makeGame(at: fixture.root.appending(path: "Explicit", directoryHint: .isDirectory))
+    let environment = try fixture.makeGame(at: fixture.root.appending(path: "Environment", directoryHint: .isDirectory))
+    let installed = try fixture.makeGame(at: fixture.root.appending(path: "Installed", directoryHint: .isDirectory))
+    let executable = installed.appending(path: "archive-loader/bin/archive-loader")
+    try FileManager.default.createDirectory(
+        at: executable.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("fixture binary".utf8).write(to: executable)
+
+    let explicitResult = try GameDiscovery.resolve(
+        explicitRoot: explicit,
+        environment: ["ARCHIVE_LOADER_GAME_DIR": environment.path],
+        installedExecutable: executable,
+        locations: fixture.locations()
+    )
+    let environmentResult = try GameDiscovery.resolve(
+        environment: ["ARCHIVE_LOADER_GAME_DIR": environment.path],
+        installedExecutable: executable,
+        locations: fixture.locations()
+    )
+
+    #expect(explicitResult.map(\.root) == [explicit])
+    #expect(environmentResult.map(\.root) == [environment])
+}
+
+@Test func aDevelopmentBuildFallsThroughToDiscovery() throws {
+    let fixture = try DiscoveryFixture()
+    defer { fixture.cleanUp() }
+    let game = try fixture.makeGame(at: fixture.root.appending(path: "Discovered Game", directoryHint: .isDirectory))
+    // A development build lives in .build/release, whose grandparent is the
+    // package directory, not a game. Resolution must not abort on that.
+    let executable = fixture.root.appending(path: "checkout/.build/release/archive-loader")
+    try FileManager.default.createDirectory(
+        at: executable.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("fixture binary".utf8).write(to: executable)
+
+    let resolved = try GameDiscovery.resolve(
+        environment: [:],
+        installedExecutable: executable,
+        locations: fixture.locations(conventional: [game])
+    )
+
+    #expect(resolved.map(\.root) == [game])
+    #expect(resolved[0].sources == ["conventional"])
 }
