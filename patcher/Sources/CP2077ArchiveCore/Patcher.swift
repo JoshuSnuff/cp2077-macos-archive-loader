@@ -257,6 +257,14 @@ public struct RDARPatcher: Sendable {
             }
         }
 
+        // This method rewrites an official archive in place, so a malformed
+        // source has to be rejected before any bytes move. Reading a record
+        // whose segment range runs past its own table used to trap mid-rewrite,
+        // with payload already appended and the header not yet updated.
+        for write in writes {
+            try validateSegmentRange(of: write.record, in: write.source)
+        }
+
         // A hash appearing more than once in the target is only safe to replace
         // wholesale when every copy holds the same payload.
         for hash in seen.sorted() {
@@ -415,7 +423,16 @@ public struct RDARPatcher: Sendable {
         )
     }
 
+    private func validateSegmentRange(of record: RDARRecord, in archive: RDARArchive) throws {
+        let start = Int(record.segmentsStart)
+        let end = Int(record.segmentsEnd)
+        guard start <= end, end <= archive.segments.count else {
+            throw RDARArchiveError.segmentRangeOutOfBounds(record.nameHash, archive.url)
+        }
+    }
+
     private func compressedData(for record: RDARRecord, in archive: RDARArchive) throws -> Data {
+        try validateSegmentRange(of: record, in: archive)
         var data = Data()
         for i in 0..<record.segmentCount {
             let segment = archive.segments[Int(record.segmentsStart) + i]

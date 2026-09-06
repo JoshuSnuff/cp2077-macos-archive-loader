@@ -7,6 +7,7 @@ public enum RDARArchiveError: Error, CustomStringConvertible {
     case ambiguousTargetRecord(UInt64, URL)
     case noTargetArchive(URL)
     case dependencyRangeOutOfBounds(UInt64, URL)
+    case segmentRangeOutOfBounds(UInt64, URL)
 
     public var description: String {
         switch self {
@@ -22,6 +23,8 @@ public enum RDARArchiveError: Error, CustomStringConvertible {
             return "could not choose a target Mac archive for \(url.lastPathComponent); pass --target"
         case let .dependencyRangeOutOfBounds(hash, url):
             return "record \(Hashes.hex64(hash)) in \(url.lastPathComponent) has a dependency range outside the dependency table"
+        case let .segmentRangeOutOfBounds(hash, url):
+            return "record \(Hashes.hex64(hash)) in \(url.lastPathComponent) has a segment range outside the segment table"
         }
     }
 }
