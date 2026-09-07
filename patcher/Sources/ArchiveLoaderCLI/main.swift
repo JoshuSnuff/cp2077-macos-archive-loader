@@ -187,6 +187,9 @@ struct ArchiveLoaderCLI {
         }
     }
 
+    /// Both patch commands rewrite official archives in place.
+    static let patchConsequence = "patching now would rewrite archives underneath it"
+
     static func patch(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
@@ -198,8 +201,12 @@ struct ArchiveLoaderCLI {
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
+        // Refused before the lock so a live session gets the clearer message,
+        // and again after, because the game can start during acquisition.
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let patcher = RDARPatcher(game: game)
         let explicitTarget = options.value("--target").map { URL(fileURLWithPath: $0) }
         let strategy = options.value("--strategy") ?? "hybrid"
@@ -281,8 +288,10 @@ struct ArchiveLoaderCLI {
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let patcher = RDARPatcher(game: game)
         let summary = try patcher.patchHashes(
             sourceArchive: URL(fileURLWithPath: sourcePath),

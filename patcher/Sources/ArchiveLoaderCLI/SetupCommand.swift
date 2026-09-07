@@ -23,10 +23,16 @@ enum SetupCommand {
         let game = GameInstall(root: candidate.root)
         let store = BaselineStore(game: game)
 
+        // Refused before the lock so a live session gets the clearer message.
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
+
         // Taken before anything is inspected: a concurrent run must not be
         // able to patch the archives between the gate and the capture.
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
+
+        // The game can start while the lock is being acquired.
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
 
         print("Game     \(game.root.path)")
         print("Version  \(candidate.version)  (\(candidate.sources.joined(separator: "+")))")
@@ -45,6 +51,12 @@ enum SetupCommand {
 
         printLaunchCommand(game: game)
     }
+
+    /// A capture clones the archives a live session is reading, and a
+    /// same-version `--rebaseline` restores them underneath it first.
+    static let setupConsequence =
+        "capturing a baseline reads the official archives, and --rebaseline restores them,"
+        + " neither of which is safe underneath a live session"
 
     static func runPreflight(game: GameInstall) throws {
         let report = Preflight.run(game: game)
