@@ -1,125 +1,116 @@
 # archive-loader
 
-`archive-loader` is a native archive-mod loader for Cyberpunk 2077 on macOS and
-Apple Silicon. A release contains one binary and a setup script. It wraps the
-launcher you already use, patches official Mac archives in place, verifies the
-planned changes, and restores the recorded baseline when the launcher exits.
+Archive mod loading for Cyberpunk 2077 on macOS (Apple Silicon).
 
-## Why it rewrites official archives
+The Mac version of the game has no way to load `.archive` mods. `archive-loader`
+gives it one: it patches your official game archives just before launch, runs
+the game, and puts the originals back when you quit. Nothing stays modified
+after a session.
 
-The macOS game has no mod-loading hook that can override resources owned by an
-official archive. A loose archive can add resources, but it cannot override an
-existing resource regardless of where it sorts:
+- Version 0.1.0
+- Apple Silicon Macs only
+- PC `.archive` mods only
 
-| Probe filename | Sort position | Override applied? |
-|---|---|---|
-| `0_probe_sasha.archive` | Before the official archives | No |
-| `basegame_99_probe_sasha.archive` | After the official archives | No |
+## Install
 
-Those two launches established that in-place rewriting is the available
-override mechanism. The loader plans all enabled mods first, then rewrites each
-affected official archive once.
-
-## Install, launch, and recover
-
-1. Extract the `archive-loader/` folder into the Cyberpunk 2077 directory,
-   beside `Cyberpunk2077.app`.
-2. Run the setup script from the game directory:
+1. Extract the `archive-loader` folder into your Cyberpunk 2077 directory,
+   next to `Cyberpunk2077.app`.
+2. Before the next step, run your storefront's verify/repair on the game
+   (Steam: *Verify integrity of game files*; GOG/Heroic: *Verify and repair*).
+   Setup takes a snapshot of your archives and needs them unmodified.
+3. Double-click `archive-loader/setup.command`, or run it from the game
+   directory:
 
    ```bash
    ./archive-loader/setup.command
    ```
 
-   Setup clears macOS quarantine when needed, handles a sibling folder left by
-   Archive Utility, captures a baseline of the official archives, and prints
-   the launch command.
-3. Put `.archive` mods in `archive-loader/mods/enabled/`.
-4. Run your existing launcher through the loader. For example:
+Setup records a baseline copy of your official archives and prints the exact
+command to launch with. It refuses to continue if it finds signs that something
+has already modified your archives.
 
-   ```bash
-   ./archive-loader/bin/archive-loader run -- ./launch_modded.sh
-   ```
+## Add mods
 
-   Substitute the launcher you already use. The loader does not edit or replace
-   it, and the same wrapper works with `launch_red4ext.sh` or a launcher of your
-   own.
+Drop `.archive` files into:
 
-If the game or Mac crashes while archives are patched, recover with:
+```
+archive-loader/mods/enabled/
+```
+
+Remove a file to disable that mod. Mods are applied in alphabetical order, and
+when two mods change the same thing the first one wins — the other is reported
+at launch, not silently applied.
+
+## Launch
+
+Start the game through `archive-loader` instead of directly:
+
+```bash
+cd "/path/to/Cyberpunk 2077"
+./archive-loader/bin/archive-loader run -- ./launch_modded.sh
+```
+
+Replace `./launch_modded.sh` with whatever you normally use. If you have no
+launcher script, setup prints a command that runs the game itself.
+`archive-loader` wraps your launcher — it never edits or replaces it, so it
+works alongside a REDscript or RED4ext setup you already have.
+
+To keep using the Play button in your storefront, add the wrapper there:
+
+| Launcher | Where | What to enter |
+|---|---|---|
+| Heroic | Settings → Advanced → Wrapper | Command: `.../archive-loader/bin/archive-loader`, Arguments: `run --` |
+| Steam | Properties → Launch Options | `"/path/to/archive-loader/bin/archive-loader" run -- %command%` |
+
+Without a wrapper, the Play button launches unmodded: archives are only patched
+for the duration of a run.
+
+## If something goes wrong
+
+If the game or your Mac crashes mid-session, the archives are left patched.
+Put them back with:
 
 ```bash
 ./archive-loader/bin/archive-loader restore
 ```
 
-Check the installation without taking the mutation lock:
+To check the state of your install at any time:
 
 ```bash
 ./archive-loader/bin/archive-loader status
 ```
 
-## What the baseline proves
-
-Before capture, setup asks you to run your storefront's verify/repair and
-refuses when it finds loader artifacts. The baseline records the captured
-archives, their sizes, and SHA-256 hashes so the loader can restore that exact
-generation and report later drift.
-
-It does not verify the archives against CDPR's originals. The official archive
-set differs by language packs and installed expansions, so that comparison
-cannot be complete for every installation. The negative-evidence gate instead
-establishes that nothing on this machine had patched the archives at capture
-time, and the recorded generation preserves what was captured.
+If a mod is broken and patching fails, the launch is aborted and your install
+is left clean. Add `--vanilla-on-error` to the `run` command if you would
+rather have it launch unmodded than not launch at all.
 
 ## Disk space
 
-Setup clones every official archive, which on a full install is around 83 GB of
-files. It does not need 83 GB of free space: APFS clones share their blocks with
-the originals, so capture costs effectively nothing. Measured on a 13 GB
-archive, a clone consumed 0 MiB.
+Setup copies every official archive — around 83 GB on a full install — but it
+does not need 83 GB of free space. macOS shares the storage between a copy and
+its original, so the baseline costs almost nothing. Finder and `du` still count
+it as the full size.
 
-Space is used while a session is running, as patched archives diverge from the
-clones they share blocks with, and it is released when the baseline is restored.
-Measured with 33 mods across 47 archives, that peak was about 5 GiB.
+Real space is used only while a modded session is running, as the patched
+archives diverge from the baseline, and it is released when the game exits.
+With 33 mods across 47 archives that peak was about 5 GB.
 
-`du` reports the baseline as 83 G because it sums each file's allocated blocks
-and cannot see the sharing between them.
+## What it does not do
 
-## Scope
+- It does not install or manage RED4ext, Frida, `scc`, or the input loader. It
+  runs alongside them if you already have them.
+- It does not support Intel Macs.
+- It does not load anything other than `.archive` mods.
 
-- Apple Silicon macOS only.
-- PC `.archive` mods only.
-- RED4ext, Frida, `scc`, and inputloader are neither installed nor managed by
-  this release. The loader composes with an existing setup for those tools by
-  wrapping its launcher.
-- The release does not ship third-party runtime files or anything under
-  `gamefiles/`.
+## A note on the baseline
 
-## Building from source
+The baseline is a copy of the archives *as they are on your machine* at setup
+time. It is what restore puts back, and its hashes let `status` spot later
+drift. It is not a verification against CDPR's originals — the official archive
+set differs between installs depending on language packs and expansions — which
+is why setup asks you to verify through your storefront first and refuses to
+capture a baseline that looks already modified.
 
-Build and test the Swift package with:
+## License
 
-```bash
-swift build -c release --package-path patcher
-cp patcher/.build/release/archive-loader bin/archive-loader
-swift test --package-path patcher
-```
-
-The shell tests are separate from `swift test`:
-
-```bash
-for t in \
-    restrict_section setup_command rebaseline dyld_passthrough run_lifecycle \
-    restore_command status_command patch_command setup_script release_assemble; do
-    bash "tests/${t}_test.sh"
-done
-```
-
-To assemble the versioned Apple Silicon release archive:
-
-```bash
-./release/assemble.sh --version 0.1.0
-```
-
-It writes `build/archive-loader-0.1.0-macos-arm64.zip` after checking that the
-binary reports the requested version and contains the `__RESTRICT` linker
-segment. The zip contains immutable program files only; baselines, state, mods,
-and logs are created or retained in the game installation.
+MIT. See [LICENSE](LICENSE).
