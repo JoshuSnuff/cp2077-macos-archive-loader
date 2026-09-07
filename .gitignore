@@ -9,6 +9,7 @@ logs/*
 !logs/.gitkeep
 build/*
 !build/.gitkeep
+!build/README.md
 gamefiles/red4ext/RED4ext.dylib
 gamefiles/red4ext/FridaGadget.dylib
 gamefiles/engine/tools/scc

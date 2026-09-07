@@ -14,7 +14,8 @@ after a session.
 ## Install
 
 1. Extract the `archive-loader` folder into your Cyberpunk 2077 directory,
-   next to `Cyberpunk2077.app`.
+   next to `Cyberpunk2077.app`. If you would rather not run a binary someone
+   else built, [build it yourself](build/README.md) first.
 2. Before the next step, run your storefront's verify/repair on the game
    (Steam: *Verify integrity of game files*; GOG/Heroic: *Verify and repair*).
    Setup takes a snapshot of your archives and needs them unmodified.
@@ -84,6 +85,10 @@ If a mod is broken and patching fails, the launch is aborted and your install
 is left clean. Add `--vanilla-on-error` to the `run` command if you would
 rather have it launch unmodded than not launch at all.
 
+Each `run`, `setup`, and `restore` keeps a session log in
+`archive-loader/logs/`. Open `archive-loader/logs/latest.log` to see the most
+recent session.
+
 ## Disk space
 
 Setup copies every official archive — around 83 GB on a full install — but it
@@ -95,18 +100,8 @@ Real space is used only while a modded session is running, as the patched
 archives diverge from the baseline, and it is released when the game exits.
 With 33 mods across 47 archives that peak was about 5 GB.
 
-## What it does not do
+## Build it yourself
 
-- It does not install or manage RED4ext, Frida, `scc`, or the input loader. It
-  runs alongside them if you already have them.
-- It does not support Intel Macs.
-- It does not load anything other than `.archive` mods.
-
-## A note on the baseline
-
-The baseline is a copy of the archives *as they are on your machine* at setup
-time. It is what restore puts back, and its hashes let `status` spot later
-drift. It is not a verification against CDPR's originals — the official archive
-set differs between installs depending on language packs and expansions — which
-is why setup asks you to verify through your storefront first and refuses to
-capture a baseline that looks already modified.
+The loader builds from this repository with Swift 6.3 and no game installation:
+two commands produce the binary, and a third packages the same zip that is
+released. See [build/README.md](build/README.md).
