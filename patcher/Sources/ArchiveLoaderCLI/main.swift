@@ -232,6 +232,11 @@ struct ArchiveLoaderCLI {
                 )
             }
             if let loose = summary.looseArchive {
+                // Record it the way `run` does. Without this the file is
+                // unaccounted for, so restore leaves it behind for ever — and
+                // it is the loader's own output, not something a user chose to
+                // install by hand.
+                try ArtifactLedger(game: game).record([loose])
                 print("  looseArchive=\(loose.path)")
             }
             print("patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
