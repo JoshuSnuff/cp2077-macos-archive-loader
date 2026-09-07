@@ -1,4 +1,4 @@
-# archive-loader
+# Archive-Loader
 
 Archive mod loading for Cyberpunk 2077 on macOS (Apple Silicon).
 
@@ -110,7 +110,3 @@ drift. It is not a verification against CDPR's originals — the official archiv
 set differs between installs depending on language packs and expansions — which
 is why setup asks you to verify through your storefront first and refuses to
 capture a baseline that looks already modified.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
