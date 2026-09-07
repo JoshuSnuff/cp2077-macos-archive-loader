@@ -3,7 +3,7 @@ archive-loader — archive mod loading for Cyberpunk 2077 on macOS (Apple Silico
 INSTALL
   1. Extract this folder into your Cyberpunk 2077 directory, beside
      Cyberpunk2077.app.
-  2. Run:  ./archive-loader/setup.sh
+  2. Run:  ./archive-loader/setup.command
      It captures a baseline copy of your official archives and prints the
      command to launch with.
   3. Put .archive mods in archive-loader/mods/enabled/

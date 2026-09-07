@@ -21,7 +21,7 @@ The zip contains only immutable program files:
 
 ```text
 archive-loader/
-├── setup.sh
+├── setup.command
 ├── bin/archive-loader
 ├── mods/enabled/.keep
 ├── README.txt

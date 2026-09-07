@@ -43,15 +43,15 @@ merge_into_existing_install() {
     # and logs/ are the user's and are never touched.
     rm -rf "$existing/bin"
     cp -R "$HERE/bin" "$existing/bin"
-    cp "$HERE/setup.sh" "$existing/setup.sh"
+    cp "$HERE/setup.command" "$existing/setup.command"
     cp "$HERE/version" "$existing/version"
     [ -f "$HERE/README.txt" ] && cp "$HERE/README.txt" "$existing/README.txt"
 
-    chmod +x "$existing/setup.sh" "$existing/bin/archive-loader"
+    chmod +x "$existing/setup.command" "$existing/bin/archive-loader"
 
     echo ""
     cd "$parent"
-    ARCHIVE_LOADER_REMOVE_SIBLING="$HERE" exec "$existing/setup.sh" "$@"
+    ARCHIVE_LOADER_REMOVE_SIBLING="$HERE" exec "$existing/setup.command" "$@"
 }
 merge_into_existing_install "$@"
 

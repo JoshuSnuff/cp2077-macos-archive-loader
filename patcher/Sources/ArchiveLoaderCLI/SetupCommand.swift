@@ -130,13 +130,45 @@ enum SetupCommand {
                 }
             }
         } else {
+            // No launcher is the normal case for someone running archive mods
+            // only, which is everything 0.1 supports. Telling them to supply a
+            // launcher they have no reason to own would be a dead end, so point
+            // run at the game itself — it wraps any executable, not just a
+            // script.
             print("  cd \(shellQuote(game.root.path))")
-            print("  ./archive-loader/bin/archive-loader run -- <your launcher>")
+            print("  \(LauncherDetection.runCommand(for: GameProcess.executable(in: game), game: game))")
             print("")
-            print("No launcher script was found in the game directory. archive-loader wraps")
-            print("whatever you already use to start the game; it never edits or replaces it.")
+            print("No launcher script was found here, so that runs the game directly.")
+            print("If you later add one — for REDscript or RED4ext — wrap it instead:")
+            print("")
+            print("  ./archive-loader/bin/archive-loader run -- ./your_launcher.sh")
+            print("")
+            print("archive-loader never edits or replaces a launcher; it only wraps one.")
         }
+        printLauncherIntegration(game: game)
         print("")
+    }
+
+    /// Most people start the game from their storefront, not a terminal.
+    ///
+    /// Both Heroic and Steam accept a wrapper command, and `run -- <cmd>` is
+    /// already that shape, so this needs configuring rather than building.
+    /// Without it the Play button silently launches unmodded: archives are only
+    /// patched for the duration of a `run`.
+    static func printLauncherIntegration(game: GameInstall) {
+        let binary = game.loaderDirectory.appending(path: "bin/archive-loader").path
+        print("")
+        print("To keep using your storefront's Play button, add a wrapper there:")
+        print("")
+        print("  Heroic  Settings > Advanced > Wrapper")
+        print("            Command:   \(binary)")
+        print("            Arguments: run --")
+        print("")
+        print("  Steam   Properties > Launch Options")
+        print("            \(shellQuote(binary)) run -- %command%")
+        print("")
+        print("Without it, Play launches unmodded — archives are only patched")
+        print("for the duration of a run.")
     }
 
     static func shellQuote(_ value: String) -> String {

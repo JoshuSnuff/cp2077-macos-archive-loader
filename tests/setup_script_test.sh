@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPOSITORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-$REPOSITORY_DIR/patcher/.build/release/archive-loader}"
-SETUP_SH="$REPOSITORY_DIR/release/payload/archive-loader/setup.sh"
+SETUP="$REPOSITORY_DIR/release/payload/archive-loader/setup.command"
 FIXTURES="$REPOSITORY_DIR/tests/fixtures"
 [ -x "$BINARY" ] || { echo "ERROR: no binary at $BINARY" >&2; exit 1; }
 
@@ -28,9 +28,9 @@ install_payload() {   # $1 = destination directory name
     local dest="$GAME_DIR/$1"
     mkdir -p "$dest/bin" "$dest/mods/enabled"
     cp "$BINARY" "$dest/bin/archive-loader"
-    cp "$SETUP_SH" "$dest/setup.sh"
+    cp "$SETUP" "$dest/setup.command"
     printf '%s\n' "0.1.0" > "$dest/version"
-    chmod +x "$dest/setup.sh" "$dest/bin/archive-loader"
+    chmod +x "$dest/setup.command" "$dest/bin/archive-loader"
 }
 
 # --- Quarantine is cleared and reported -------------------------------------
@@ -39,13 +39,13 @@ install_payload "archive-loader"
 xattr -w com.apple.quarantine "0081;00000000;Safari;" \
     "$GAME_DIR/archive-loader/bin/archive-loader"
 
-output="$("$GAME_DIR/archive-loader/setup.sh" --assume-clean 2>&1)" \
-    || fail "setup.sh failed: $output"
-case "$output" in *quarantine*) ;; *) fail "setup.sh did not report clearing it: $output" ;; esac
+output="$("$GAME_DIR/archive-loader/setup.command" --assume-clean 2>&1)" \
+    || fail "setup.command failed: $output"
+case "$output" in *quarantine*) ;; *) fail "setup.command did not report clearing it: $output" ;; esac
 if xattr -p com.apple.quarantine "$GAME_DIR/archive-loader/bin/archive-loader" > /dev/null 2>&1; then
     fail "quarantine was not cleared"
 fi
-[ -L "$GAME_DIR/archive-loader/pristine" ] || fail "setup.sh did not reach the binary"
+[ -L "$GAME_DIR/archive-loader/pristine" ] || fail "setup.command did not reach the binary"
 
 # --- The Archive Utility re-extraction shape is merged ----------------------
 # Archive Utility is not scriptable and no CLI extractor reproduces its
@@ -62,7 +62,7 @@ printf 'NEWER BINARY\n' > "$GAME_DIR/archive-loader 2/bin/archive-loader"
 chmod +x "$GAME_DIR/archive-loader 2/bin/archive-loader"
 
 set +e
-"$GAME_DIR/archive-loader 2/setup.sh" --assume-clean > /dev/null 2>&1
+"$GAME_DIR/archive-loader 2/setup.command" --assume-clean > /dev/null 2>&1
 set -e
 
 if [ -d "$GAME_DIR/archive-loader 2" ]; then fail "the duplicate was not removed"; fi
@@ -82,4 +82,4 @@ grep -q "NEWER BINARY" "$GAME_DIR/archive-loader/bin/archive-loader" \
 [ "$(cat "$GAME_DIR/archive-loader/logs/session.log")" = "keep this log" ] \
     || fail "log contents changed"
 
-echo "setup.sh test passed"
+echo "setup.command test passed"

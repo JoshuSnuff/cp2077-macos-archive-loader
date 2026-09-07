@@ -31,9 +31,15 @@ public enum LauncherDetection {
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         )) ?? []
 
+        // `.command` counts because Finder runs those on a double-click, so a
+        // user who wanted a clickable launcher would have named it that way —
+        // and it is what this release names its own installer.
+        let scriptExtensions: Set<String> = ["sh", "command"]
+        let ourOwnFiles: Set<String> = ["setup.sh", "setup.command"]
+
         let executableScripts = entries.filter { url in
-            url.pathExtension == "sh"
-                && url.lastPathComponent != "setup.sh"
+            scriptExtensions.contains(url.pathExtension)
+                && !ourOwnFiles.contains(url.lastPathComponent)
                 && manager.isExecutableFile(atPath: url.path)
                 && (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }.map(\.normalizedFileURL)
@@ -52,9 +58,23 @@ public enum LauncherDetection {
     }
 
     /// The exact command to run, relative to the game directory.
+    ///
+    /// The target is not always a script in the game root: with no launcher at
+    /// all, `setup` points this at the game binary, which lives several levels
+    /// down inside the app bundle. Using just the last path component would
+    /// print `./Cyberpunk2077` and send the user to a file that is not there.
     public static func runCommand(for launcher: URL, game: GameInstall) -> String {
         let loaderBinary = "./\(InstalledLayout.directoryName)/bin/\(InstalledLayout.directoryName)"
-        return "\(quote(loaderBinary)) run -- \(quote("./\(launcher.lastPathComponent)"))"
+        return "\(quote(loaderBinary)) run -- \(quote("./\(relativePath(of: launcher, in: game))"))"
+    }
+
+    /// `launcher` expressed relative to the game root, falling back to the
+    /// absolute path when it lies outside.
+    static func relativePath(of launcher: URL, in game: GameInstall) -> String {
+        let root = game.root.normalizedFileURL.path
+        let path = launcher.normalizedFileURL.path
+        guard path.hasPrefix(root + "/") else { return path }
+        return String(path.dropFirst(root.count + 1))
     }
 
     private static func quote(_ value: String) -> String {

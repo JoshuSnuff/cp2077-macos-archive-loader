@@ -18,7 +18,7 @@ produced="$("$REPOSITORY_DIR/release/assemble.sh" --version "$VERSION")" \
 listing="$(unzip -Z1 "$ZIP" | sort)"
 
 for required in \
-    "archive-loader/setup.sh" \
+    "archive-loader/setup.command" \
     "archive-loader/bin/archive-loader" \
     "archive-loader/version" \
     "archive-loader/README.txt" \
