@@ -108,7 +108,7 @@ The shell tests are separate from `swift test`:
 ```bash
 for t in \
     restrict_section setup_command rebaseline dyld_passthrough run_lifecycle \
-    restore_command status_command setup_script release_assemble; do
+    restore_command status_command patch_command setup_script release_assemble; do
     bash "tests/${t}_test.sh"
 done
 ```

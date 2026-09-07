@@ -23,6 +23,9 @@ fail() {
     exit 1
 }
 
+# A real executable, so the running-game guard has a process to find.
+cc -o "$WORK_DIR/fakegame" "$REPOSITORY_DIR/tests/fixtures/fakegame.c"
+
 # A game directory whose name carries a space, as normal installs do.
 GAME_DIR="$WORK_DIR/Cyberpunk 2077"
 make_game() {
@@ -31,8 +34,7 @@ make_game() {
         "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
         "$GAME_DIR/archive/Mac/content" \
         "$GAME_DIR/archive/Mac/ep1"
-    touch "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
-    chmod +x "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
+    cp "$WORK_DIR/fakegame" "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
     plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
     plutil -insert CFBundleShortVersionString -string 2.3.1 \
         "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
@@ -107,5 +109,27 @@ if output="$(printf 'n\n' | "$BINARY" setup --game "$GAME_DIR" 2>&1)"; then
 fi
 [ -e "$GAME_DIR/archive-loader/pristine" ] \
     && fail "a declined setup published a baseline"
+
+# --- 6. A running game is refused, before and after --rebaseline ------------
+# Capture reads the archives the live session is using, and a same-version
+# --rebaseline restores them underneath it before recapturing.
+make_game
+ARCHIVE_LOADER_FAKE_SLEEP=6 "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077" &
+game_pid=$!
+sleep 0.5
+set +e
+output="$("$BINARY" setup --game "$GAME_DIR" --assume-clean 2>&1)"; code=$?
+set -e
+[ "$code" -ne 0 ] || fail "setup captured a baseline while the game was running"
+case "$output" in *running*) ;; *) fail "the refusal did not mention the running game: $output" ;; esac
+[ -e "$GAME_DIR/archive-loader/pristine" ] \
+    && fail "a refused setup published a baseline"
+
+set +e
+output="$("$BINARY" setup --game "$GAME_DIR" --rebaseline --assume-clean 2>&1)"; code=$?
+set -e
+wait "$game_pid" 2>/dev/null || true
+[ "$code" -ne 0 ] || fail "rebaseline ran while the game was live"
+case "$output" in *running*) ;; *) fail "the rebaseline refusal did not mention the game: $output" ;; esac
 
 echo "setup command test passed"

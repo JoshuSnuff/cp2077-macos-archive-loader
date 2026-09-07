@@ -15,15 +15,19 @@ enum RestoreCommand {
         let store = BaselineStore(game: game)
         let ledger = ArtifactLedger(game: game)
 
-        guard !GameProcess.isRunning(game: game) else {
-            throw CLIError.usage(
-                "Cyberpunk 2077 is running from this installation."
-                    + " Quit it first: restoring now would rewrite archives underneath it."
-            )
-        }
+        try GameRunningGuard.refuseIfRunning(
+            game: game,
+            consequence: "restoring now would rewrite archives underneath it"
+        )
 
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
+
+        // The game can start while the lock is being acquired.
+        try GameRunningGuard.refuseIfRunning(
+            game: game,
+            consequence: "restoring now would rewrite archives underneath it"
+        )
 
         guard let manifest = try store.publishedManifest() else {
             throw CLIError.usage(

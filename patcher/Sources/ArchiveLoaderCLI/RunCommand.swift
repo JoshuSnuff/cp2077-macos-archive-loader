@@ -55,24 +55,22 @@ enum RunCommand {
         let launcher = resolveLauncher(launcherPath, gameRoot: game.root)
 
         // Refused before the lock so a live session gets the clearer message.
-        guard !GameProcess.isRunning(game: game) else {
-            throw CLIError.usage(
-                "Cyberpunk 2077 is already running from this installation."
-                    + " Quit it first: restoring now would rewrite archives underneath it."
-            )
-        }
+        try GameRunningGuard.refuseIfRunning(
+            game: game,
+            alreadyRunning: true,
+            consequence: "restoring now would rewrite archives underneath it"
+        )
 
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
 
         // The game could have started during lock acquisition. Never restore
         // under a session that won the race after the initial pre-lock check.
-        guard !GameProcess.isRunning(game: game) else {
-            throw CLIError.usage(
-                "Cyberpunk 2077 is already running from this installation."
-                    + " Quit it first: restoring now would rewrite archives underneath it."
-            )
-        }
+        try GameRunningGuard.refuseIfRunning(
+            game: game,
+            alreadyRunning: true,
+            consequence: "restoring now would rewrite archives underneath it"
+        )
 
         guard let manifest = try store.publishedManifest() else {
             throw CLIError.usage(
