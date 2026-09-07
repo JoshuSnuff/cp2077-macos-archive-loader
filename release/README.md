@@ -1,33 +1,14 @@
 # Release assembly
 
-This directory defines the release zip for `archive-loader` on macOS Apple
-Silicon. It is not an installed runtime and contains no mutable game data.
+`assemble.sh` builds the distributable zip from `payload/` and `bin/archive-loader`:
 
-Assemble the release artifact with:
+    ./release/assemble.sh --version 0.1.0
 
-```bash
-./release/assemble.sh --version 0.1.0
-```
+It refuses when `--version` disagrees with what the binary reports, so a hand-typed
+version cannot ship under the wrong name, and when the binary is missing its
+`__RESTRICT` segment — without that, an ambient `DYLD_INSERT_LIBRARIES` injects the
+wrapper instead of reaching the game.
 
-The result is written beneath the ignored `build/` directory as
-`archive-loader-0.1.0-macos-arm64.zip`.
-
-Assembly refuses to produce a release when the requested version disagrees
-with the version reported by `bin/archive-loader`, or when the binary does not
-contain the `__RESTRICT` segment required to keep ambient
-`DYLD_INSERT_LIBRARIES` out of the wrapper.
-
-The zip contains only immutable program files:
-
-```text
-archive-loader/
-├── setup.command
-├── bin/archive-loader
-├── mods/enabled/.keep
-├── README.txt
-└── version
-```
-
-Baselines, pristine data, state, mods, and logs are created at first run, so
-extracting an update cannot destroy them. The release does not ship
-`install.sh`, third-party runtime files, or supported-build manifests.
+Only immutable program files go in the zip. Baselines, state, mods, and logs are
+created at first run inside the game directory, so extracting an update over an
+existing install cannot destroy them.
