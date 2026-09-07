@@ -179,6 +179,31 @@ struct TestGame {
         return url.normalizedFileURL
     }
 
+    /// Writes an official archive into `archive/Mac/ep1`.
+    @discardableResult
+    func writeEP1(_ name: String, records: [TestRecord]) throws -> URL {
+        let url = ep1Directory.appending(path: name)
+        try writeTestArchive(to: url, records: records)
+        return url.normalizedFileURL
+    }
+
+    /// Creates an arbitrary file or directory under the game root, for seeding
+    /// the artifacts the negative-evidence gate has to notice.
+    @discardableResult
+    func seed(relativePath: String, isDirectory: Bool = false) throws -> URL {
+        let url = gameRoot.appending(path: relativePath, directoryHint: isDirectory ? .isDirectory : .notDirectory)
+        if isDirectory {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } else {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("seeded".utf8).write(to: url)
+        }
+        return url
+    }
+
     /// Writes a mod archive outside the game tree.
     @discardableResult
     func writeMod(_ name: String, records: [TestRecord]) throws -> URL {

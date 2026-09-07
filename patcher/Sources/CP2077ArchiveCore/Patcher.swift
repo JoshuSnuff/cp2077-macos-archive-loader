@@ -1,7 +1,6 @@
 import Foundation
 
 public struct PatchSummary: Sendable {
-    public let backupDirectory: URL
     public let patchedCount: Int
     public let insertedCount: Int
     public let replacedCount: Int
@@ -11,7 +10,6 @@ public struct PatchSummary: Sendable {
 /// What one run of a plan did to one official archive.
 public struct ArchivePatchSummary: Sendable {
     public let targetArchive: URL
-    public let backupDirectory: URL
     public let patchedCount: Int
     public let insertedCount: Int
     public let replacedCount: Int
@@ -72,11 +70,10 @@ public struct RDARPatcher: Sendable {
 
     /// Applies a plan to the install.
     ///
-    /// Work is grouped by target archive, so each official archive is backed up
-    /// and rewritten exactly once per run no matter how many mods contribute
-    /// records to it. Patching per mod is what produced hundreds of backup
-    /// directories for a single 33-mod injection.
-    public func apply(plan: PatchPlan, keepBackups: Int = 3) throws -> PlanPatchSummary {
+    /// Work is grouped by target archive, so each official archive is rewritten
+    /// exactly once per run no matter how many mods contribute records to it.
+    /// Patching per mod instead rewrote some archives dozens of times.
+    public func apply(plan: PatchPlan) throws -> PlanPatchSummary {
         var sourceCache: [URL: RDARArchive] = [:]
         func source(_ url: URL) throws -> RDARArchive {
             if let cached = sourceCache[url] { return cached }
@@ -85,8 +82,6 @@ public struct RDARPatcher: Sendable {
             return archive
         }
 
-        let store = BackupStore(game: game)
-        let run = try store.beginRun(plan: plan)
         var archives: [ArchivePatchSummary] = []
         for targetURL in plan.targets {
             let hashes = plan.officialWork[targetURL] ?? []
@@ -101,12 +96,10 @@ public struct RDARPatcher: Sendable {
                     dependencies: winner.dependencies
                 )
             }
-            archives.append(try patch(targetURL: targetURL, writes: writes, run: run))
+            archives.append(try patch(targetURL: targetURL, writes: writes))
         }
 
         let looseArchive = try writeLooseArchive(plan: plan, source: source)
-        try run.complete()
-        try store.prune(keep: keepBackups)
 
         return PlanPatchSummary(
             archives: archives,
@@ -120,20 +113,18 @@ public struct RDARPatcher: Sendable {
 
     public func patchAll(
         sourceArchive sourceURL: URL,
-        targetArchive targetURL: URL,
-        keepBackups: Int = 3
+        targetArchive targetURL: URL
     ) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
         return try patchSummary(targetURL: targetURL, writes: try source.records.map {
             try PlannedWrite(hash: $0.nameHash, source: source, record: $0, dependencies: source.dependencies(for: $0))
-        }, mods: [sourceURL], keepBackups: keepBackups)
+        })
     }
 
     public func patchPaths(
         sourceArchive sourceURL: URL,
         targetArchive targetURL: URL,
-        paths: [String],
-        keepBackups: Int = 3
+        paths: [String]
     ) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
         return try patchSummary(targetURL: targetURL, writes: try paths.map { path in
@@ -142,14 +133,13 @@ public struct RDARPatcher: Sendable {
                 throw RDARArchiveError.noTargetArchive(sourceURL)
             }
             return PlannedWrite(hash: hash, source: source, record: record, dependencies: try source.dependencies(for: record))
-        }, mods: [sourceURL], keepBackups: keepBackups)
+        })
     }
 
     public func patchHashes(
         sourceArchive sourceURL: URL,
         targetArchive targetURL: URL,
-        hashes: [UInt64],
-        keepBackups: Int = 3
+        hashes: [UInt64]
     ) throws -> PatchSummary {
         let source = try RDARArchive.read(sourceURL)
         return try patchSummary(targetURL: targetURL, writes: try hashes.map { hash in
@@ -157,7 +147,7 @@ public struct RDARPatcher: Sendable {
                 throw RDARArchiveError.noTargetArchive(sourceURL)
             }
             return PlannedWrite(hash: hash, source: source, record: record, dependencies: try source.dependencies(for: record))
-        }, mods: [sourceURL], keepBackups: keepBackups)
+        })
     }
 
     public func patchHybrid(sourceArchive sourceURL: URL) throws -> HybridPatchSummary {
@@ -167,7 +157,6 @@ public struct RDARPatcher: Sendable {
             sourceArchive: sourceURL,
             officialPatches: summary.archives.map {
                 PatchSummary(
-                    backupDirectory: $0.backupDirectory,
                     patchedCount: $0.patchedCount,
                     insertedCount: $0.insertedCount,
                     replacedCount: $0.replacedCount,
@@ -241,33 +230,10 @@ public struct RDARPatcher: Sendable {
 
     private func patchSummary(
         targetURL: URL,
-        writes: [PlannedWrite],
-        mods: [URL],
-        keepBackups: Int
+        writes: [PlannedWrite]
     ) throws -> PatchSummary {
-        var winners: [UInt64: WinningRecord] = [:]
-        for write in writes where winners[write.hash] == nil {
-            winners[write.hash] = WinningRecord(
-                hash: write.hash,
-                modArchive: write.source.url,
-                record: write.record,
-                dependencies: write.dependencies
-            )
-        }
-        let plan = PatchPlan(
-            mods: mods,
-            winners: winners,
-            officialWork: [targetURL: writes.map(\.hash)],
-            newResources: [],
-            losers: []
-        )
-        let store = BackupStore(game: game)
-        let run = try store.beginRun(plan: plan)
-        let summary = try patch(targetURL: targetURL, writes: writes, run: run)
-        try run.complete()
-        try store.prune(keep: keepBackups)
+        let summary = try patch(targetURL: targetURL, writes: writes)
         return PatchSummary(
-            backupDirectory: summary.backupDirectory,
             patchedCount: summary.patchedCount,
             insertedCount: summary.insertedCount,
             replacedCount: summary.replacedCount,
@@ -285,7 +251,7 @@ public struct RDARPatcher: Sendable {
     /// recomputed. Taking the stock record as the base and overwriting named
     /// fields is what silently left `timestamp` and `numInlineBufferSegments`
     /// describing the stock resource while the payload was the mod's.
-    private func patch(targetURL: URL, writes: [PlannedWrite], run: RunHandle) throws -> ArchivePatchSummary {
+    private func patch(targetURL: URL, writes: [PlannedWrite]) throws -> ArchivePatchSummary {
         let target = try RDARArchive.read(targetURL)
 
         var targetRecordsByHash: [UInt64: [RDARRecord]] = [:]
@@ -318,11 +284,6 @@ public struct RDARPatcher: Sendable {
                 throw RDARArchiveError.ambiguousTargetRecord(hash, targetURL)
             }
         }
-
-        let backup = try run.backup(
-            targetArchive: targetURL,
-            note: "before applying \(writes.count) records"
-        )
 
         let added = writes.filter { targetRecordsByHash[$0.hash] == nil }
         let newRecordBytes = added.count * 56
@@ -458,7 +419,6 @@ public struct RDARPatcher: Sendable {
 
         return ArchivePatchSummary(
             targetArchive: targetURL,
-            backupDirectory: backup,
             patchedCount: writes.count,
             insertedCount: added.count,
             replacedCount: writes.count - added.count
