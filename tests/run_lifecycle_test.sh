@@ -236,7 +236,10 @@ case "$output" in
     *"Recover with"*) ;;
     *) fail "no recovery command was printed: $output" ;;
 esac
-printf '%s\n' "$output" | rg -q "cd '.*/Cyberpunk 2077'" \
+# grep, not rg: ripgrep is not a macOS built-in and not a dependency this
+# project declares, so a contributor running the suite would see this fail for
+# a reason that has nothing to do with the loader.
+printf '%s\n' "$output" | grep -q "cd '.*/Cyberpunk 2077'" \
     || fail "the recovery command did not quote the game path: $output"
 
 echo "run lifecycle test passed"
