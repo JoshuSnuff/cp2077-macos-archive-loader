@@ -27,7 +27,7 @@ affected official archive once.
 2. Run the setup script from the game directory:
 
    ```bash
-   ./archive-loader/setup.sh
+   ./archive-loader/setup.command
    ```
 
    Setup clears macOS quarantine when needed, handles a sibling folder left by
@@ -69,6 +69,20 @@ cannot be complete for every installation. The negative-evidence gate instead
 establishes that nothing on this machine had patched the archives at capture
 time, and the recorded generation preserves what was captured.
 
+## Disk space
+
+Setup clones every official archive, which on a full install is around 83 GB of
+files. It does not need 83 GB of free space: APFS clones share their blocks with
+the originals, so capture costs effectively nothing. Measured on a 13 GB
+archive, a clone consumed 0 MiB.
+
+Space is used while a session is running, as patched archives diverge from the
+clones they share blocks with, and it is released when the baseline is restored.
+Measured with 33 mods across 47 archives, that peak was about 5 GiB.
+
+`du` reports the baseline as 83 G because it sums each file's allocated blocks
+and cannot see the sharing between them.
+
 ## Scope
 
 - Apple Silicon macOS only.
@@ -94,7 +108,7 @@ The shell tests are separate from `swift test`:
 ```bash
 for t in \
     restrict_section setup_command rebaseline dyld_passthrough run_lifecycle \
-    restore_command status_command setup_sh release_assemble; do
+    restore_command status_command setup_script release_assemble; do
     bash "tests/${t}_test.sh"
 done
 ```
