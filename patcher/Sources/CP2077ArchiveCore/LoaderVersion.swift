@@ -4,7 +4,7 @@
 /// release whose `--version` argument disagrees with what the binary reports,
 /// so a hand-typed release cannot silently ship under the wrong name.
 public enum LoaderVersion {
-    public static let current = "0.1.0"
+    public static let current = "0.1.1"
 
     /// `current` split into numeric components, or nil if it is malformed.
     public static var components: (major: Int, minor: Int, patch: Int)? {

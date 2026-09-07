@@ -21,6 +21,9 @@ struct ArchiveLoaderCLI {
         do {
             try run()
         } catch {
+            if error is ReportedCommandError {
+                exit(1)
+            }
             fputs("error: \(error)\n", stderr)
             exit(1)
         }
@@ -313,13 +316,13 @@ struct ArchiveLoaderCLI {
         archive-loader
 
         Commands:
-          setup [--game GAME_DIR] [--rebaseline] [--assume-clean]
-          run [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]
+          setup [--debug] [--game GAME_DIR] [--rebaseline] [--assume-clean]
+          run [--debug] [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
           patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
-          restore [--game GAME_DIR]
+          restore [--debug] [--game GAME_DIR]
           status [--game GAME_DIR] [--deep]
           --version
 
@@ -330,6 +333,17 @@ struct ArchiveLoaderCLI {
 }
 
 ArchiveLoaderCLI.main()
+
+struct ReportedCommandError: Error {}
+
+func reportingErrors(to log: SessionLog, _ operation: () throws -> Void) throws {
+    do {
+        try operation()
+    } catch {
+        log.failure("\(error)")
+        throw ReportedCommandError()
+    }
+}
 
 private struct DetectedGame: Encodable {
     let path: String

@@ -12,6 +12,7 @@ enum RunCommand {
         var arguments = args
         var vanillaOnError = false
         var explicitGame: String?
+        var debug = ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
 
         // Everything after `--` belongs to the launcher, untouched.
         var wrapped: [String] = []
@@ -23,6 +24,9 @@ enum RunCommand {
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
+            case "--debug":
+                debug = true
+                index += 1
             case "--vanilla-on-error":
                 vanillaOnError = true
                 index += 1
@@ -37,7 +41,7 @@ enum RunCommand {
 
         guard let launcherPath = wrapped.first else {
             throw CLIError.usage(
-                "usage: archive-loader run [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]"
+                "usage: archive-loader run [--debug] [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]"
             )
         }
         let launcherArguments = Array(wrapped.dropFirst())
@@ -53,6 +57,32 @@ enum RunCommand {
         let ledger = ArtifactLedger(game: game)
 
         let launcher = resolveLauncher(launcherPath, gameRoot: game.root)
+        let log = try SessionLog(command: "run", logsDirectory: game.logsDirectory, debug: debug)
+
+        try reportingErrors(to: log) {
+            try runResolved(
+                game: game,
+                candidate: candidate,
+                store: store,
+                ledger: ledger,
+                launcher: launcher,
+                launcherArguments: launcherArguments,
+                vanillaOnError: vanillaOnError,
+                log: log
+            )
+        }
+    }
+
+    private static func runResolved(
+        game: GameInstall,
+        candidate: GameCandidate,
+        store: BaselineStore,
+        ledger: ArtifactLedger,
+        launcher: URL,
+        launcherArguments: [String],
+        vanillaOnError: Bool,
+        log: SessionLog
+    ) throws {
 
         // Refused before the lock so a live session gets the clearer message.
         try GameRunningGuard.refuseIfRunning(
@@ -88,24 +118,30 @@ enum RunCommand {
 
         // 1. Restore first. A prior SIGKILL or power loss leaves the install
         //    patched, and patching again on top would stack a second edit.
-        print("Restoring \(manifest.archives.count) archives...")
+        log.step("Restoring \(manifest.archives.count) archives...")
         do {
             try restore(store: store, ledger: ledger)
         } catch {
-            reportRestoreFailure(error, game: game)
+            reportRestoreFailure(error, game: game, log: log)
             exit(restoreFailureExitCode)
         }
 
         // 2. Patch, unless there is nothing to patch.
         let mods = try ModCollection.enabledMods(game: game)
+        var patchedArchives: Set<URL> = []
         if mods.isEmpty {
             // Not an error: a no-mod run still restores, cleans up, and
             // launches. It is the normal way to play unmodded through the
             // same command, and `patch` rejects an empty --mods list anyway.
-            print("No mods in \(game.modsEnabledDirectory.path); launching unmodded")
+            log.info("No mods in \(game.modsEnabledDirectory.path); launching unmodded")
         } else {
             do {
-                try patchAndVerify(mods: mods, game: game, ledger: ledger)
+                patchedArchives = try patchAndVerify(
+                    mods: mods,
+                    game: game,
+                    ledger: ledger,
+                    log: log
+                )
             } catch {
                 let patchError = error
                 // Patch and verification can fail after writing some files.
@@ -113,11 +149,11 @@ enum RunCommand {
                 do {
                     try recordExistingManagedArtifact(game: game, ledger: ledger)
                 } catch {
-                    reportRestoreFailure(error, game: game)
+                    reportRestoreFailure(error, game: game, log: log)
                     exit(restoreFailureExitCode)
                 }
-                if let restoreError = restoreQuietly(store: store, ledger: ledger) {
-                    reportRestoreFailure(restoreError, game: game)
+                if let restoreError = restoreQuietly(store: store, ledger: ledger, log: log) {
+                    reportRestoreFailure(restoreError, game: game, log: log)
                     exit(restoreFailureExitCode)
                 }
 
@@ -127,12 +163,12 @@ enum RunCommand {
                             + " Pass --vanilla-on-error to launch unmodded instead."
                     )
                 }
-                print("warning: \(patchError)")
-                print("warning: --vanilla-on-error given; restoring and launching unmodded")
+                log.warning("\(patchError)")
+                log.warning("--vanilla-on-error given; restoring and launching unmodded")
                 do {
                     try restore(store: store, ledger: ledger)
                 } catch {
-                    reportRestoreFailure(error, game: game)
+                    reportRestoreFailure(error, game: game, log: log)
                     exit(restoreFailureExitCode)
                 }
             }
@@ -143,7 +179,11 @@ enum RunCommand {
 
         // Started before the launcher so that a foreground launcher's session
         // is observed while it happens.
-        let watcher = GameWatcher(executable: GameProcess.executable(in: game))
+        let watcher = GameWatcher(
+            executable: GameProcess.executable(in: game),
+            gameRoot: game.root,
+            expectedArchives: patchedArchives
+        )
         watcher.start()
         defer { watcher.stop() }
 
@@ -169,23 +209,24 @@ enum RunCommand {
         } catch {
             // Even a launcher that never started leaves a patched install.
             launcherTarget.value = nil
-            if let restoreError = restoreQuietly(store: store, ledger: ledger) {
-                reportRestoreFailure(restoreError, game: game)
+            if let restoreError = restoreQuietly(store: store, ledger: ledger, log: log) {
+                reportRestoreFailure(restoreError, game: game, log: log)
                 exit(restoreFailureExitCode)
             }
             throw error
         }
 
         launcherTarget.value = nil
-        waitForGameToFinish(game: game, watcher: watcher)
+        waitForGameToFinish(game: game, watcher: watcher, log: log)
         watcher.stop()
-        let restoreError = restoreQuietly(store: store, ledger: ledger)
+        reportArchiveObservations(watcher.archiveObservation, game: game, log: log)
+        let restoreError = restoreQuietly(store: store, ledger: ledger, log: log)
 
         let launcherCode = outcome.wasSignalled
             ? outcome.reportableCode
             : signalForwarder.receivedSignal.map { 128 + $0 } ?? outcome.reportableCode
         if let restoreError {
-            reportRestoreFailure(restoreError, game: game, launcherCode: launcherCode)
+            reportRestoreFailure(restoreError, game: game, launcherCode: launcherCode, log: log)
             exit(restoreFailureExitCode)
         }
         if launcherCode != 0 {
@@ -200,41 +241,62 @@ enum RunCommand {
         return gameRoot.appending(path: path).standardizedFileURL
     }
 
-    static func patchAndVerify(mods: [URL], game: GameInstall, ledger: ArtifactLedger) throws {
-        print("Patching with \(mods.count) mods...")
+    static func patchAndVerify(
+        mods: [URL],
+        game: GameInstall,
+        ledger: ArtifactLedger,
+        log: SessionLog
+    ) throws -> Set<URL> {
+        log.step("Patching with \(mods.count) mods...")
         for mod in mods {
-            print("  \(mod.lastPathComponent)")
+            log.detail(mod.lastPathComponent)
         }
 
         let plan = try PatchPlanner.plan(mods: mods, game: game)
         for loser in plan.losers {
-            print(
-                "  conflict: \(Hashes.hex64(loser.hash)) in \(loser.modArchive.lastPathComponent)"
+            log.detail(
+                "conflict: \(Hashes.hex64(loser.hash)) in \(loser.modArchive.lastPathComponent)"
                     + " loses to \(loser.winnerArchive.lastPathComponent)"
             )
+        }
+        for hash in plan.winners.keys.sorted() {
+            guard let winner = plan.winners[hash] else { continue }
+            let owners = plan.officialWork
+                .filter { $0.value.contains(hash) }
+                .map(\.key.lastPathComponent)
+                .sorted()
+                .joined(separator: ",")
+            log.debug {
+                let record = winner.record
+                return "resource \(Hashes.hex64(hash)) mod=\(winner.modArchive.lastPathComponent)"
+                    + " owners=[\(owners)] segments=\(record.segmentsStart)..<\(record.segmentsEnd)"
+                    + " dependencies=\(record.dependenciesStart)..<\(record.dependenciesEnd)"
+            }
         }
 
         let summary = try RDARPatcher(game: game).apply(plan: plan)
         if let loose = summary.looseArchive {
             try ledger.record([loose])
         }
-        print("Patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
+        log.info("Patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
+        let patched = summary.archives.map(\.targetArchive) + [summary.looseArchive].compactMap { $0 }
 
         // A plan that cannot be verified is not one to play on.
         let report = try PlanVerifier.verify(plan: plan, game: game)
         guard report.isClean else {
             for archive in report.archives where !archive.isClean {
-                print("  BAD \(archive.archive.lastPathComponent)")
+                log.detail("BAD \(archive.archive.lastPathComponent)")
                 for issue in archive.issues {
-                    print("      ! \(issue)")
+                    log.detail("    ! \(issue)")
                 }
             }
             throw CLIError.usage("verification failed after patching")
         }
-        print(
+        log.info(
             "Verified \(report.matchingRecordCount) records match the plan"
                 + " across \(report.archives.count) archives"
         )
+        return Set(patched.map(\.normalizedFileURL))
     }
 
     /// The launcher exiting is not the session ending.
@@ -243,7 +305,7 @@ enum RunCommand {
     /// using `open -a` returns immediately — and `open` returns before the
     /// application is even observable, so a bare check would restore into the
     /// gap and hand the game vanilla archives.
-    static func waitForGameToFinish(game: GameInstall, watcher: GameWatcher) {
+    static func waitForGameToFinish(game: GameInstall, watcher: GameWatcher, log: SessionLog) {
         let executable = GameProcess.executable(in: game)
 
         if GameProcess.runningPIDs(matching: executable).isEmpty {
@@ -265,7 +327,7 @@ enum RunCommand {
             guard GameProcess.waitForStart(matching: executable) else { return }
         }
 
-        print("The launcher exited but the game is still running; waiting for it...")
+        log.info("The launcher exited but the game is still running; waiting for it...")
         GameProcess.waitForExit(matching: executable)
     }
 
@@ -274,9 +336,13 @@ enum RunCommand {
         try ledger.removeRecorded()
     }
 
-    static func restoreQuietly(store: BaselineStore, ledger: ArtifactLedger) -> Error? {
+    static func restoreQuietly(
+        store: BaselineStore,
+        ledger: ArtifactLedger,
+        log: SessionLog
+    ) -> Error? {
         do {
-            print("Restoring the baseline...")
+            log.step("Restoring the baseline...")
             try restore(store: store, ledger: ledger)
             return nil
         } catch {
@@ -290,22 +356,53 @@ enum RunCommand {
         try ledger.record([artifact])
     }
 
-    static func reportRestoreFailure(_ error: Error, game: GameInstall, launcherCode: Int32 = 0) {
-        fputs("\n", stderr)
+    static func reportRestoreFailure(
+        _ error: Error,
+        game: GameInstall,
+        launcherCode: Int32 = 0,
+        log: SessionLog
+    ) {
+        log.stderr()
         // Deliberately not "the install is patched": with zero mods nothing was
         // patched, and claiming otherwise would send the user hunting a problem
         // they do not have. What is certain is that the archives were not
         // returned to the baseline.
-        fputs("error: RESTORE FAILED — the archives were not returned to the baseline\n", stderr)
-        fputs("error: \(error)\n", stderr)
+        log.failure("\(error)")
         if launcherCode != 0 {
-            fputs("note: the launcher also exited \(launcherCode), which is the lesser problem\n", stderr)
+            log.note("the launcher also exited \(launcherCode), which is the lesser problem")
         }
-        fputs("\n", stderr)
-        fputs("Recover with:\n", stderr)
-        fputs("  cd \(shellQuote(game.root.path))\n", stderr)
-        fputs("  ./archive-loader/bin/archive-loader run -- /usr/bin/true\n", stderr)
-        fputs("\n", stderr)
+        log.stderr()
+        log.stderr("Recover with:")
+        log.stderr("  cd \(shellQuote(game.root.path))")
+        log.stderr("  ./archive-loader/bin/archive-loader run -- /usr/bin/true")
+        log.stderr()
+        // Keep the load-bearing failure as the durable tail: exit(3) below
+        // bypasses deferred cleanup.
+        log.failure("RESTORE FAILED — the archives were not returned to the baseline")
+    }
+
+    private static func reportArchiveObservations(
+        _ observation: ArchiveObservation,
+        game: GameInstall,
+        log: SessionLog
+    ) {
+        guard !observation.expected.isEmpty else { return }
+        let relative: (URL) -> String = { url in
+            let prefix = game.root.appending(path: "archive/Mac").normalizedFileURL.path + "/"
+            return url.normalizedFileURL.path.hasPrefix(prefix)
+                ? String(url.normalizedFileURL.path.dropFirst(prefix.count))
+                : url.lastPathComponent
+        }
+        log.info("Game opened \(observation.observed.count) of \(observation.expected.count) patched archives")
+        for archive in observation.expected.sorted(by: { $0.path < $1.path }) {
+            log.detail("\(relative(archive))  \(observation.observed.contains(archive) ? "opened" : "not observed")")
+        }
+        log.debug {
+            "archive sample 1=[\(observation.samples.first?.map(\.path).sorted().joined(separator: ",") ?? "")]"
+        }
+        log.debug {
+            "archive sample 2=[\(observation.samples.dropFirst().first?.map(\.path).sorted().joined(separator: ",") ?? "")]"
+        }
     }
 
     private static func shellQuote(_ value: String) -> String {

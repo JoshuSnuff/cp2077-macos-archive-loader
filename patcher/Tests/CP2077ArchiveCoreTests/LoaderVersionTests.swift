@@ -9,8 +9,8 @@ import Testing
     #expect(components != nil, "LoaderVersion.current must be MAJOR.MINOR.PATCH")
     #expect(components?.major == 0)
     #expect(components?.minor == 1)
-    #expect(components?.patch == 0)
-    #expect(LoaderVersion.current == "0.1.0")
+    #expect(components?.patch == 1)
+    #expect(LoaderVersion.current == "0.1.1")
 }
 
 @Test func malformedVersionsHaveNoComponents() {

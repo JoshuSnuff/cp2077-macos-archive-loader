@@ -3,6 +3,24 @@ import Foundation
 import Darwin
 #endif
 
+public struct ArchiveObservation: Sendable {
+    public let expected: Set<URL>
+    public let samples: [Set<URL>]
+
+    public init(expected: Set<URL>, samples: [Set<URL>]) {
+        self.expected = Set(expected.map(\.normalizedFileURL))
+        self.samples = samples.map { Set($0.map(\.normalizedFileURL)) }
+    }
+
+    public var observed: Set<URL> {
+        expected.intersection(samples.reduce(into: Set<URL>()) { $0.formUnion($1) })
+    }
+
+    public var notObserved: Set<URL> {
+        expected.subtracting(observed)
+    }
+}
+
 /// Whether this installation's game is running.
 ///
 /// Matching is on the full executable path rather than the process name: a
@@ -49,6 +67,60 @@ public enum GameProcess {
         return matches
     }
 
+    /// Narrows descriptor paths to archive files inside this installation.
+    /// Kept deterministic so boundary and set-difference behavior can be
+    /// covered without launching the game.
+    public static func archiveURLs(paths: [String], under gameRoot: URL) -> Set<URL> {
+        let root = gameRoot.normalizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return Set(paths.compactMap { path in
+            let url = URL(fileURLWithPath: path).normalizedFileURL
+            guard url.path.hasPrefix(prefix), url.path.hasSuffix(".archive") else { return nil }
+            return url
+        })
+    }
+
+    /// Returns nil when libproc cannot inspect the process. That is explicitly
+    /// different from a successful sample containing no archive descriptors.
+    public static func openArchiveFiles(pid: pid_t, under gameRoot: URL) -> Set<URL>? {
+        let byteCount = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard byteCount > 0 else { return nil }
+
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var descriptors = [proc_fdinfo](
+            repeating: proc_fdinfo(),
+            count: Int(byteCount) / stride + 16
+        )
+        let readCount = descriptors.withUnsafeMutableBytes { buffer in
+            proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buffer.baseAddress, Int32(buffer.count))
+        }
+        guard readCount > 0 else { return nil }
+
+        var paths: [String] = []
+        for descriptor in descriptors.prefix(Int(readCount) / stride)
+        where descriptor.proc_fdtype == PROX_FDTYPE_VNODE {
+            var vnode = vnode_fdinfowithpath()
+            let vnodeSize = Int32(MemoryLayout<vnode_fdinfowithpath>.stride)
+            let result = withUnsafeMutablePointer(to: &vnode) { pointer in
+                proc_pidfdinfo(
+                    pid,
+                    descriptor.proc_fd,
+                    PROC_PIDFDVNODEPATHINFO,
+                    pointer,
+                    vnodeSize
+                )
+            }
+            guard result == vnodeSize else { continue }
+            let path = withUnsafePointer(to: &vnode.pvip.vip_path) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                    String(cString: $0)
+                }
+            }
+            paths.append(path)
+        }
+        return archiveURLs(paths: paths, under: gameRoot)
+    }
+
     public static func waitForStart(
         matching executable: URL,
         timeout: TimeInterval = startupGracePeriod
@@ -80,13 +152,49 @@ public enum GameProcess {
 /// records which one happened.
 public final class GameWatcher: @unchecked Sendable {
     private let executable: URL
+    private let gameRoot: URL?
+    private let expectedArchives: Set<URL>
+    private let archiveOpenSampleDelay: TimeInterval
+    private let processLookup: (URL) -> [pid_t]
+    private let archiveSampler: (pid_t, URL) -> Set<URL>?
     private let mutex = NSLock()
     private var seen = false
     private var running = false
+    private var firstSampleAt: Date?
+    private var sampleAttempts = 0
+    private var archiveSamples: [Set<URL>] = []
     private var thread: Thread?
 
-    public init(executable: URL) {
+    public convenience init(
+        executable: URL,
+        gameRoot: URL? = nil,
+        expectedArchives: Set<URL> = [],
+        archiveOpenSampleDelay: TimeInterval = 1.0
+    ) {
+        self.init(
+            executable: executable,
+            gameRoot: gameRoot,
+            expectedArchives: expectedArchives,
+            archiveOpenSampleDelay: archiveOpenSampleDelay,
+            runningPIDs: GameProcess.runningPIDs(matching:),
+            archiveSampler: GameProcess.openArchiveFiles(pid:under:)
+        )
+    }
+
+    init(
+        executable: URL,
+        gameRoot: URL?,
+        expectedArchives: Set<URL>,
+        archiveOpenSampleDelay: TimeInterval,
+        runningPIDs: @escaping (URL) -> [pid_t],
+        archiveSampler: @escaping (pid_t, URL) -> Set<URL>?
+    ) {
         self.executable = executable
+        self.gameRoot = gameRoot
+        self.expectedArchives = Set(expectedArchives.map(\.normalizedFileURL))
+        self.archiveOpenSampleDelay = archiveOpenSampleDelay
+        processLookup = runningPIDs
+        self.archiveSampler = archiveSampler
     }
 
     public var everSeen: Bool {
@@ -95,28 +203,45 @@ public final class GameWatcher: @unchecked Sendable {
         return seen
     }
 
-    public func start() {
+    public var archiveObservation: ArchiveObservation {
         mutex.lock()
-        running = true
-        mutex.unlock()
+        defer { mutex.unlock() }
+        return ArchiveObservation(expected: expectedArchives, samples: archiveSamples)
+    }
 
+    public func start() {
         let thread = Thread { [weak self] in
             while let self, self.isRunning {
-                if !GameProcess.runningPIDs(matching: self.executable).isEmpty {
+                let pids = self.processLookup(self.executable)
+                if !pids.isEmpty {
                     self.markSeen()
+                    self.sampleArchivesIfDue(pids: pids)
                 }
                 Thread.sleep(forTimeInterval: GameProcess.pollInterval)
             }
         }
         thread.stackSize = 512 * 1024
-        thread.start()
+        mutex.lock()
+        running = true
         self.thread = thread
+        mutex.unlock()
+        thread.start()
     }
 
     public func stop() {
         mutex.lock()
         running = false
+        let samplingThread = thread
         mutex.unlock()
+
+        // A sampler may still be between descriptor collection and committing
+        // its result. Wait without holding the mutex so archiveObservation is
+        // final when stop returns. A callback running on this thread must not
+        // wait for itself.
+        guard let samplingThread, samplingThread !== Thread.current else { return }
+        while !samplingThread.isFinished {
+            Thread.sleep(forTimeInterval: 0.001)
+        }
     }
 
     private var isRunning: Bool {
@@ -128,6 +253,40 @@ public final class GameWatcher: @unchecked Sendable {
     private func markSeen() {
         mutex.lock()
         seen = true
+        mutex.unlock()
+    }
+
+    private func sampleArchivesIfDue(pids: [pid_t]) {
+        guard let gameRoot, !expectedArchives.isEmpty else { return }
+
+        let now = Date()
+        mutex.lock()
+        let due: Bool
+        if sampleAttempts == 0 {
+            firstSampleAt = now
+            due = true
+        } else if sampleAttempts == 1,
+                  let firstSampleAt,
+                  now.timeIntervalSince(firstSampleAt) >= archiveOpenSampleDelay {
+            due = true
+        } else {
+            due = false
+        }
+        if due { sampleAttempts += 1 }
+        mutex.unlock()
+        guard due else { return }
+
+        var sample = Set<URL>()
+        var observedAnyProcess = false
+        for pid in pids {
+            guard let files = archiveSampler(pid, gameRoot) else { continue }
+            observedAnyProcess = true
+            sample.formUnion(files)
+        }
+        guard observedAnyProcess else { return }
+
+        mutex.lock()
+        archiveSamples.append(sample)
         mutex.unlock()
     }
 }

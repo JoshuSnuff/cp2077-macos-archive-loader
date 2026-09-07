@@ -4,6 +4,8 @@ import Foundation
 enum RestoreCommand {
     static func run(_ args: [String]) throws {
         let options = try Options(args)
+        let debug = args.contains("--debug")
+            || ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
         let candidates = try GameDiscovery.resolve(
             explicitRoot: options.value("--game").map { URL(fileURLWithPath: $0, isDirectory: true) }
         )
@@ -14,6 +16,20 @@ enum RestoreCommand {
         let game = GameInstall(root: candidate.root)
         let store = BaselineStore(game: game)
         let ledger = ArtifactLedger(game: game)
+        let log = try SessionLog(command: "restore", logsDirectory: game.logsDirectory, debug: debug)
+
+        try reportingErrors(to: log) {
+            try runResolved(game: game, store: store, ledger: ledger, candidate: candidate, log: log)
+        }
+    }
+
+    private static func runResolved(
+        game: GameInstall,
+        store: BaselineStore,
+        ledger: ArtifactLedger,
+        candidate: GameCandidate,
+        log: SessionLog
+    ) throws {
 
         try GameRunningGuard.refuseIfRunning(
             game: game,
@@ -40,9 +56,9 @@ enum RestoreCommand {
         // crash is exactly when the install is in a state we would rather not
         // reason about, and the recorded bytes are the only vanilla we have.
         if manifest.gameVersion != candidate.version {
-            print("warning: the baseline records \(manifest.gameVersion) but the game reports"
+            log.warning("the baseline records \(manifest.gameVersion) but the game reports"
                 + " \(candidate.version)")
-            print("warning: restoring anyway — run `archive-loader setup --rebaseline` afterwards")
+            log.warning("restoring anyway — run `archive-loader setup --rebaseline` afterwards")
         }
 
         let comparison = try store.compareLive(deep: false)
@@ -55,14 +71,14 @@ enum RestoreCommand {
             )
         }
 
-        print("Restoring \(manifest.archives.count) archives from the baseline...")
+        log.step("Restoring \(manifest.archives.count) archives from the baseline...")
         var restored = 0
         _ = try store.restore { _ in restored += 1 }
         try ledger.removeRecorded(
-            onRemoved: { print("  removed \($0.lastPathComponent)") },
-            onSkipped: { print("  kept \($0.lastPathComponent) — \($1)") }
+            onRemoved: { log.detail("removed \($0.lastPathComponent)") },
+            onSkipped: { log.detail("kept \($0.lastPathComponent) — \($1)") }
         )
-        print("Restored \(restored) archives")
+        log.info("Restored \(restored) archives")
 
         let after = try store.compareLive(deep: true)
         guard after.isPristine else {
@@ -84,8 +100,8 @@ enum RestoreCommand {
             return true
         }
 
-        print("")
-        print("Restored the recorded archives; they match the baseline.")
+        log.info()
+        log.info("Restored the recorded archives; they match the baseline.")
 
         guard artifacts.isEmpty else {
             // Report, but succeed. Restore's contract is to put the recorded
@@ -94,29 +110,29 @@ enum RestoreCommand {
             // hand-installed basegame_99_ mod, which is documented practice —
             // so a non-zero exit would fail the recovery command for a user
             // who did nothing wrong.
-            print("")
-            print("These are still present and were left alone:")
-            print(NegativeEvidence(findings: artifacts).summary)
-            print("")
-            print("They are not recorded in state/, so this loader will not delete")
-            print("them. Remove them yourself if they are not yours.")
+            log.info()
+            log.info("These are still present and were left alone:")
+            log.info(NegativeEvidence(findings: artifacts).summary)
+            log.info()
+            log.info("They are not recorded in state/, so this loader will not delete")
+            log.info("them. Remove them yourself if they are not yours.")
             // Deliberately no "safe to delete archive-loader/" here: with files
             // outstanding, the install is not back to stock and saying so would
             // be the same false claim this check exists to prevent.
             return
         }
 
-        print("")
+        log.info()
         // The one ordering hazard worth naming: there is no uninstall command,
         // and deleting archive-loader/ before restoring would strand a patched
         // install with its only copy of vanilla inside the deleted directory.
-        print("archive-loader/ is safe to delete if you want to remove the loader.")
+        log.info("archive-loader/ is safe to delete if you want to remove the loader.")
 
         if !after.unrecorded.isEmpty {
-            print("")
-            print("Not recorded in the baseline, and left alone:")
+            log.info()
+            log.info("Not recorded in the baseline, and left alone:")
             for path in after.unrecorded {
-                print("  \(path)")
+                log.detail(path)
             }
         }
     }

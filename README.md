@@ -7,7 +7,7 @@ gives it one: it patches your official game archives just before launch, runs
 the game, and puts the originals back when you quit. Nothing stays modified
 after a session.
 
-- Version 0.1.0
+- Version 0.1.1
 - Apple Silicon Macs only
 - PC `.archive` mods only
 

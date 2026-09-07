@@ -17,15 +17,17 @@ enum Rebaseline {
         game: GameInstall,
         store: BaselineStore,
         candidate: GameCandidate,
-        assumeClean: Bool
+        assumeClean: Bool,
+        log: SessionLog
     ) throws {
         guard let existing = try store.publishedManifest() else {
-            print("No baseline is published; capturing a first one.")
+            log.info("No baseline is published; capturing a first one.")
             try SetupCommand.capture(
                 game: game,
                 store: store,
                 candidate: candidate,
-                assumeClean: assumeClean
+                assumeClean: assumeClean,
+                log: log
             )
             return
         }
@@ -46,7 +48,8 @@ enum Rebaseline {
                 candidate: candidate,
                 existing: existing,
                 artifacts: artifacts,
-                assumeClean: assumeClean
+                assumeClean: assumeClean,
+                log: log
             )
         } else {
             try sameVersion(
@@ -54,7 +57,8 @@ enum Rebaseline {
                 store: store,
                 candidate: candidate,
                 existing: existing,
-                assumeClean: assumeClean
+                assumeClean: assumeClean,
+                log: log
             )
         }
     }
@@ -64,9 +68,10 @@ enum Rebaseline {
         store: BaselineStore,
         candidate: GameCandidate,
         existing: BaselineManifest,
-        assumeClean: Bool
+        assumeClean: Bool,
+        log: SessionLog
     ) throws {
-        print("Rebaseline: game version unchanged (\(candidate.version))")
+        log.info("Rebaseline: game version unchanged (\(candidate.version))")
 
         let comparison = try store.compareLive(deep: false)
         guard comparison.isRestorable else {
@@ -79,7 +84,7 @@ enum Rebaseline {
             )
         }
 
-        print("Restoring \(existing.archives.count) archives from the published baseline...")
+        log.step("Restoring \(existing.archives.count) archives from the published baseline...")
         _ = try store.restore()
 
         let afterRestore = try store.compareLive(deep: true)
@@ -91,14 +96,14 @@ enum Rebaseline {
             )
         }
 
-        print("Capturing a new generation...")
+        log.step("Capturing a new generation...")
         let manifest = try store.capture(
             gameVersion: candidate.version,
             storefront: candidate.sources.joined(separator: "+")
         )
         try store.publish(manifest)
-        print("Baseline \(manifest.archives.count) archives recaptured")
-        print("")
+        log.info("Baseline \(manifest.archives.count) archives recaptured")
+        log.info()
     }
 
     private static func changedVersion(
@@ -107,11 +112,12 @@ enum Rebaseline {
         candidate: GameCandidate,
         existing: BaselineManifest,
         artifacts: [NegativeEvidence.Finding],
-        assumeClean: Bool
+        assumeClean: Bool,
+        log: SessionLog
     ) throws {
-        print("Rebaseline: game version changed \(existing.gameVersion) -> \(candidate.version)")
-        print("            the recorded archives belong to the old build, so nothing is restored")
-        print("")
+        log.info("Rebaseline: game version changed \(existing.gameVersion) -> \(candidate.version)")
+        log.info("            the recorded archives belong to the old build, so nothing is restored")
+        log.info()
 
         guard artifacts.isEmpty else {
             // Neither path is available: restoring would write the old build
@@ -128,17 +134,17 @@ enum Rebaseline {
             )
         }
 
-        guard assumeClean || SetupCommand.confirmStorefrontVerify() else {
+        guard assumeClean || SetupCommand.confirmStorefrontVerify(log: log) else {
             throw CLIError.usage("setup needs that confirmation to continue; nothing was changed")
         }
 
-        print("Capturing a new generation from the updated installation...")
+        log.step("Capturing a new generation from the updated installation...")
         let manifest = try store.capture(
             gameVersion: candidate.version,
             storefront: candidate.sources.joined(separator: "+")
         )
         try store.publish(manifest)
-        print("Baseline \(manifest.archives.count) archives captured for \(candidate.version)")
-        print("")
+        log.info("Baseline \(manifest.archives.count) archives captured for \(candidate.version)")
+        log.info()
     }
 }

@@ -9,6 +9,8 @@ enum SetupCommand {
         let options = try Options(args)
         let assumeClean = args.contains("--assume-clean")
         let rebaseline = args.contains("--rebaseline")
+        let debug = args.contains("--debug")
+            || ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
 
         let explicitRoot = options.value("--game").map { URL(fileURLWithPath: $0, isDirectory: true) }
         let candidates = try GameDiscovery.resolve(explicitRoot: explicitRoot)
@@ -22,6 +24,28 @@ enum SetupCommand {
 
         let game = GameInstall(root: candidate.root)
         let store = BaselineStore(game: game)
+        let log = try SessionLog(command: "setup", logsDirectory: game.logsDirectory, debug: debug)
+
+        try reportingErrors(to: log) {
+            try runResolved(
+                game: game,
+                store: store,
+                candidate: candidate,
+                assumeClean: assumeClean,
+                rebaseline: rebaseline,
+                log: log
+            )
+        }
+    }
+
+    private static func runResolved(
+        game: GameInstall,
+        store: BaselineStore,
+        candidate: GameCandidate,
+        assumeClean: Bool,
+        rebaseline: Bool,
+        log: SessionLog
+    ) throws {
 
         // Refused before the lock so a live session gets the clearer message.
         try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
@@ -34,22 +58,34 @@ enum SetupCommand {
         // The game can start while the lock is being acquired.
         try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
 
-        print("Game     \(game.root.path)")
-        print("Version  \(candidate.version)  (\(candidate.sources.joined(separator: "+")))")
-        print("")
+        log.info("Game     \(game.root.path)")
+        log.info("Version  \(candidate.version)  (\(candidate.sources.joined(separator: "+")))")
+        log.info()
 
-        try runPreflight(game: game)
+        try runPreflight(game: game, log: log)
 
         if rebaseline {
-            try Rebaseline.run(game: game, store: store, candidate: candidate, assumeClean: assumeClean)
+            try Rebaseline.run(
+                game: game,
+                store: store,
+                candidate: candidate,
+                assumeClean: assumeClean,
+                log: log
+            )
         } else if let existing = try store.publishedManifest() {
-            print("Baseline \(existing.archives.count) archives, captured \(existing.capturedAt)")
-            print("         already published; use --rebaseline to replace it")
+            log.info("Baseline \(existing.archives.count) archives, captured \(existing.capturedAt)")
+            log.info("         already published; use --rebaseline to replace it")
         } else {
-            try capture(game: game, store: store, candidate: candidate, assumeClean: assumeClean)
+            try capture(
+                game: game,
+                store: store,
+                candidate: candidate,
+                assumeClean: assumeClean,
+                log: log
+            )
         }
 
-        printLaunchCommand(game: game)
+        printLaunchCommand(game: game, log: log)
     }
 
     /// A capture clones the archives a live session is reading, and a
@@ -58,13 +94,13 @@ enum SetupCommand {
         "capturing a baseline reads the official archives, and --rebaseline restores them,"
         + " neither of which is safe underneath a live session"
 
-    static func runPreflight(game: GameInstall) throws {
+    static func runPreflight(game: GameInstall, log: SessionLog) throws {
         let report = Preflight.run(game: game)
         for check in report.checks {
             let detail = check.detail.map { " — \($0)" } ?? ""
-            print("  \(check.passed ? "OK  " : "FAIL") \(check.description)\(detail)")
+            log.detail("\(check.passed ? "OK  " : "FAIL") \(check.description)\(detail)")
         }
-        print("")
+        log.info()
         guard report.isClean else {
             throw CLIError.usage("preflight failed; nothing was changed")
         }
@@ -74,7 +110,8 @@ enum SetupCommand {
         game: GameInstall,
         store: BaselineStore,
         candidate: GameCandidate,
-        assumeClean: Bool
+        assumeClean: Bool,
+        log: SessionLog
     ) throws {
         let evidence = try NegativeEvidence.inspect(game: game)
         guard evidence.isClean else {
@@ -86,11 +123,11 @@ enum SetupCommand {
             )
         }
 
-        guard assumeClean || confirmStorefrontVerify() else {
+        guard assumeClean || confirmStorefrontVerify(log: log) else {
             throw CLIError.usage("setup needs that confirmation to continue; nothing was changed")
         }
 
-        print("Cloning official archives...")
+        log.step("Cloning official archives...")
         var count = 0
         let manifest = try store.capture(
             gameVersion: candidate.version,
@@ -98,16 +135,16 @@ enum SetupCommand {
             willClone: { _ in count += 1 }
         )
         try store.publish(manifest)
-        print("Baseline \(manifest.archives.count) archives captured and published (\(count) cloned)")
-        print("")
+        log.info("Baseline \(manifest.archives.count) archives captured and published (\(count) cloned)")
+        log.info()
     }
 
     /// The gate detects loader traces, not arbitrary tampering, so the user
     /// attesting to a storefront verify is part of what the baseline's
     /// trustworthiness rests on.
-    static func confirmStorefrontVerify() -> Bool {
+    static func confirmStorefrontVerify(log: SessionLog) -> Bool {
         guard isatty(STDIN_FILENO) == 1 else {
-            print("""
+            log.info("""
             This baseline becomes the only copy of your vanilla archives, so it must be
             captured from an unmodified installation. Run your storefront's verify or
             repair first (Steam: Verify integrity; GOG/Heroic: Verify and repair).
@@ -118,27 +155,27 @@ enum SetupCommand {
             return false
         }
 
-        print("""
+        log.info("""
         This baseline becomes the only copy of your vanilla archives.
         Have you run your storefront's verify/repair on this installation?
         """)
-        print("Continue? [y/N] ", terminator: "")
+        log.prompt("Continue? [y/N] ")
         guard let answer = readLine(strippingNewline: true)?.lowercased() else { return false }
         return answer == "y" || answer == "yes"
     }
 
-    static func printLaunchCommand(game: GameInstall) {
+    static func printLaunchCommand(game: GameInstall, log: SessionLog) {
         let launchers = (try? LauncherDetection.detect(game: game)) ?? []
-        print("Launch your game with:")
-        print("")
+        log.info("Launch your game with:")
+        log.info()
         if let launcher = launchers.first {
-            print("  cd \(shellQuote(game.root.path))")
-            print("  \(LauncherDetection.runCommand(for: launcher.url, game: game))")
+            log.detail("cd \(shellQuote(game.root.path))")
+            log.detail(LauncherDetection.runCommand(for: launcher.url, game: game))
             if launchers.count > 1 {
-                print("")
-                print("Other launchers found here:")
+                log.info()
+                log.info("Other launchers found here:")
                 for other in launchers.dropFirst() {
-                    print("  \(LauncherDetection.runCommand(for: other.url, game: game))")
+                    log.detail(LauncherDetection.runCommand(for: other.url, game: game))
                 }
             }
         } else {
@@ -147,18 +184,18 @@ enum SetupCommand {
             // launcher they have no reason to own would be a dead end, so point
             // run at the game itself — it wraps any executable, not just a
             // script.
-            print("  cd \(shellQuote(game.root.path))")
-            print("  \(LauncherDetection.runCommand(for: GameProcess.executable(in: game), game: game))")
-            print("")
-            print("No launcher script was found here, so that runs the game directly.")
-            print("If you later add one — for REDscript or RED4ext — wrap it instead:")
-            print("")
-            print("  ./archive-loader/bin/archive-loader run -- ./your_launcher.sh")
-            print("")
-            print("archive-loader never edits or replaces a launcher; it only wraps one.")
+            log.detail("cd \(shellQuote(game.root.path))")
+            log.detail(LauncherDetection.runCommand(for: GameProcess.executable(in: game), game: game))
+            log.info()
+            log.info("No launcher script was found here, so that runs the game directly.")
+            log.info("If you later add one — for REDscript or RED4ext — wrap it instead:")
+            log.info()
+            log.detail("./archive-loader/bin/archive-loader run -- ./your_launcher.sh")
+            log.info()
+            log.info("archive-loader never edits or replaces a launcher; it only wraps one.")
         }
-        printLauncherIntegration(game: game)
-        print("")
+        printLauncherIntegration(game: game, log: log)
+        log.info()
     }
 
     /// Most people start the game from their storefront, not a terminal.
@@ -167,20 +204,20 @@ enum SetupCommand {
     /// already that shape, so this needs configuring rather than building.
     /// Without it the Play button silently launches unmodded: archives are only
     /// patched for the duration of a `run`.
-    static func printLauncherIntegration(game: GameInstall) {
+    static func printLauncherIntegration(game: GameInstall, log: SessionLog) {
         let binary = game.loaderDirectory.appending(path: "bin/archive-loader").path
-        print("")
-        print("To keep using your storefront's Play button, add a wrapper there:")
-        print("")
-        print("  Heroic  Settings > Advanced > Wrapper")
-        print("            Command:   \(binary)")
-        print("            Arguments: run --")
-        print("")
-        print("  Steam   Properties > Launch Options")
-        print("            \(shellQuote(binary)) run -- %command%")
-        print("")
-        print("Without it, Play launches unmodded — archives are only patched")
-        print("for the duration of a run.")
+        log.info()
+        log.info("To keep using your storefront's Play button, add a wrapper there:")
+        log.info()
+        log.detail("Heroic  Settings > Advanced > Wrapper")
+        log.info("            Command:   \(binary)")
+        log.info("            Arguments: run --")
+        log.info()
+        log.detail("Steam   Properties > Launch Options")
+        log.info("            \(shellQuote(binary)) run -- %command%")
+        log.info()
+        log.info("Without it, Play launches unmodded — archives are only patched")
+        log.info("for the duration of a run.")
     }
 
     static func shellQuote(_ value: String) -> String {

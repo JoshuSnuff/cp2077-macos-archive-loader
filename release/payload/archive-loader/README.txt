@@ -26,6 +26,9 @@ RECOVER
 
       ./archive-loader/bin/archive-loader status
 
+  Each run, setup, and restore records a session under archive-loader/logs/.
+  archive-loader/logs/latest.log points to the most recent session.
+
 WHAT THE BASELINE IS
   setup clones your official archives into archive-loader/baselines/ and
   records their sizes and SHA-256 hashes. Restoring means cloning those back.
