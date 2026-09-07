@@ -39,7 +39,7 @@ private func writeLauncher(_ game: TestGame, _ name: String, executable: Bool = 
 @Test func ourOwnDirectoryIsNeverSearched() throws {
     let game = try TestGame()
     defer { game.cleanUp() }
-    let ours = game.install.loaderDirectory.appending(path: "setup.sh")
+    let ours = game.install.loaderDirectory.appending(path: "setup.command")
     try FileManager.default.createDirectory(at: game.install.loaderDirectory, withIntermediateDirectories: true)
     try Data("#!/usr/bin/env bash\n".utf8).write(to: ours)
     try FileManager.default.setAttributes(
@@ -48,6 +48,43 @@ private func writeLauncher(_ game: TestGame, _ name: String, executable: Bool = 
     )
 
     #expect(try LauncherDetection.detect(game: game.install).isEmpty)
+}
+
+@Test func ourOwnSetupScriptIsNeverOfferedAsALauncher() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+    // A user who extracted the zip badly, or copied setup out of the folder,
+    // can leave one of these in the game root. Offering it back as "your
+    // launcher" would tell them to run setup through run.
+    _ = try writeLauncher(game, "setup.command")
+    _ = try writeLauncher(game, "setup.sh")
+
+    #expect(try LauncherDetection.detect(game: game.install).isEmpty)
+}
+
+@Test func commandFilesCountAsLaunchers() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+    // Finder runs .command on a double-click, so a user who wanted a clickable
+    // launcher would have named it that way.
+    let clickable = try writeLauncher(game, "play.command")
+
+    #expect(try LauncherDetection.detect(game: game.install).map(\.url) == [clickable])
+}
+
+@Test func theRunCommandKeepsThePathIntoTheAppBundle() throws {
+    let game = try TestGame()
+    defer { game.cleanUp() }
+    let binary = GameProcess.executable(in: game.install)
+
+    // With no launcher, setup points run at the game itself. Naming it by its
+    // last path component alone would print ./Cyberpunk2077 and send the user
+    // to a file that is not there.
+    #expect(
+        LauncherDetection.runCommand(for: binary, game: game.install)
+            == "./archive-loader/bin/archive-loader run"
+                + " -- ./Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
+    )
 }
 
 @Test func theRunCommandWrapsTheLauncherRelativeToTheGameDirectory() throws {

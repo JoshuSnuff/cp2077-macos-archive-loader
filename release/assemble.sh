@@ -91,12 +91,12 @@ PAYLOAD="$STAGING_ROOT/archive-loader"
 mkdir -p "$PAYLOAD/bin" "$PAYLOAD/mods/enabled"
 
 cp "$BINARY" "$PAYLOAD/bin/archive-loader"
-cp "$REPOSITORY_DIR/release/payload/archive-loader/setup.sh" "$PAYLOAD/setup.sh"
+cp "$REPOSITORY_DIR/release/payload/archive-loader/setup.command" "$PAYLOAD/setup.command"
 cp "$REPOSITORY_DIR/release/payload/archive-loader/README.txt" "$PAYLOAD/README.txt"
 printf '%s\n' "$VERSION" > "$PAYLOAD/version"
 touch "$PAYLOAD/mods/enabled/.keep"
 
-chmod +x "$PAYLOAD/setup.sh" "$PAYLOAD/bin/archive-loader"
+chmod +x "$PAYLOAD/setup.command" "$PAYLOAD/bin/archive-loader"
 
 ( cd "$STAGING_ROOT" && zip -qry "$OUTPUT_ZIP" archive-loader )
 
