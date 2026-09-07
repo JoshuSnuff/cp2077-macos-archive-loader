@@ -32,7 +32,7 @@ printf 'patched-rubbish' > "$CONTENT"
 output="$("$BINARY" restore --game "$GAME_DIR" 2>&1)" || fail "restore failed: $output"
 [ "$(cat "$CONTENT")" = "vanilla-bytes" ] || fail "restore did not return the archive"
 case "$output" in
-    *"matches the recorded baseline"*) ;;
+    *"match the baseline"*) ;;
     *) fail "restore did not confirm the install is clean: $output" ;;
 esac
 case "$output" in
@@ -46,8 +46,28 @@ esac
 make_game
 FOREIGN="$GAME_DIR/archive/Mac/content/basegame_99_usermod.archive"
 printf 'hand installed' > "$FOREIGN"
-"$BINARY" restore --game "$GAME_DIR" > /dev/null 2>&1 || fail "restore failed with a foreign archive"
+output="$("$BINARY" restore --game "$GAME_DIR" 2>&1)" \
+    || fail "restore failed with a foreign archive"
 [ -f "$FOREIGN" ] || fail "restore deleted a hand-installed basegame_99_ mod"
+
+# Restore succeeded, so it exits 0 — but the install is not back to stock, and
+# saying "safe to delete archive-loader/" here would be the false claim this
+# check exists to prevent. It reported a clean install with 1.7 GB of leftover
+# sitting in the game directory before this was fixed.
+case "$output" in
+    *"safe to delete"*)
+        fail "restore claimed archive-loader/ was safe to delete with a file outstanding: $output" ;;
+    *) ;;
+esac
+case "$output" in
+    *"left alone"*) ;;
+    *) fail "restore did not report the outstanding file: $output" ;;
+esac
+
+# status answers a different question and must still call this dirty.
+if "$BINARY" status --game "$GAME_DIR" > /dev/null 2>&1; then
+    fail "status reported pristine with a loose archive present"
+fi
 
 # --- The lock covers restore, not just run ----------------------------------
 # Without this, a restore typed in another terminal during a live session would

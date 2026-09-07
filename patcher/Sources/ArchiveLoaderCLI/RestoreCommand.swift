@@ -68,8 +68,41 @@ enum RestoreCommand {
             )
         }
 
+        // Baseline drift is only half of "clean". compareLive knows nothing
+        // about generated files, so without this a leftover
+        // basegame_99_archive_loader.archive would sit in the game directory
+        // while restore reported the install pristine and told the user
+        // archive-loader/ was safe to delete — contradicting status, which
+        // does run this check.
+        let evidence = try NegativeEvidence.inspect(game: game)
+        let artifacts = evidence.findings.filter {
+            if case .publishedBaseline = $0 { return false }
+            return true
+        }
+
         print("")
-        print("This installation matches the recorded baseline.")
+        print("Restored the recorded archives; they match the baseline.")
+
+        guard artifacts.isEmpty else {
+            // Report, but succeed. Restore's contract is to put the recorded
+            // archives back, and it did. Now that `patch` records what it
+            // generates, anything left here is not ours — most likely a
+            // hand-installed basegame_99_ mod, which is documented practice —
+            // so a non-zero exit would fail the recovery command for a user
+            // who did nothing wrong.
+            print("")
+            print("These are still present and were left alone:")
+            print(NegativeEvidence(findings: artifacts).summary)
+            print("")
+            print("They are not recorded in state/, so this loader will not delete")
+            print("them. Remove them yourself if they are not yours.")
+            // Deliberately no "safe to delete archive-loader/" here: with files
+            // outstanding, the install is not back to stock and saying so would
+            // be the same false claim this check exists to prevent.
+            return
+        }
+
+        print("")
         // The one ordering hazard worth naming: there is no uninstall command,
         // and deleting archive-loader/ before restoring would strand a patched
         // install with its only copy of vanilla inside the deleted directory.
