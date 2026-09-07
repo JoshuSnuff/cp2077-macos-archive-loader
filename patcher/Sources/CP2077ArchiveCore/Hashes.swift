@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum Hashes {
@@ -34,6 +35,34 @@ public enum Hashes {
 
     public static func hex64(_ value: UInt64) -> String {
         "0x" + String(value, radix: 16).leftPadded(to: 16, with: "0")
+    }
+
+    /// Streaming SHA-256 of a file, lowercase hex.
+    ///
+    /// Read in chunks because the archives this hashes run to gigabytes and
+    /// the baseline hashes every one of them.
+    ///
+    /// The `autoreleasepool` is load-bearing, not decoration. `FileHandle`
+    /// bridges to Objective-C and hands back an autoreleased `NSData` per
+    /// chunk; a command-line tool has no run loop to drain the pool, so
+    /// without one here every chunk read stays alive for the whole process.
+    /// Hashing one baseline that way grows to the size of the archive set —
+    /// measured at 1.17 GB resident for a single 3 GB file, and a SIGKILL
+    /// partway through the real 83 GB install. Draining per chunk holds it
+    /// flat at about 10 MB.
+    public static func sha256Hex(ofFileAt url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while try autoreleasepool(invoking: { () -> Bool in
+            guard let chunk = try handle.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty else {
+                return false
+            }
+            hasher.update(data: chunk)
+            return true
+        }) {}
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

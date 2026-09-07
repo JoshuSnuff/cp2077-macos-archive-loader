@@ -13,7 +13,9 @@ enum CLIError: Error, CustomStringConvertible {
     }
 }
 
-@main
+/// Not `@main`: this file is named `main.swift`, so it is top-level code, and
+/// the attribute is illegal in a module that has any. The entry point is the
+/// call at the bottom of the file instead.
 struct ArchiveLoaderCLI {
     static func main() {
         do {
@@ -43,10 +45,14 @@ struct ArchiveLoaderCLI {
             try patch(args)
         case "patch-hashes":
             try patchHashes(args)
+        case "setup":
+            try SetupCommand.run(args)
+        case "run":
+            try RunCommand.run(args)
         case "restore":
-            try restore(args)
-        case "prune":
-            try prune(args)
+            try RestoreCommand.run(args)
+        case "status":
+            try StatusCommand.run(args)
         case "version", "--version", "-v":
             print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
@@ -181,22 +187,30 @@ struct ArchiveLoaderCLI {
         }
     }
 
+    /// Both patch commands rewrite official archives in place.
+    static let patchConsequence = "patching now would rewrite archives underneath it"
+
     static func patch(_ args: [String]) throws {
         let options = try Options(args)
         guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
         let modPaths = options.values(after: "--mods")
         guard !modPaths.isEmpty else {
-            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
+            throw CLIError.usage("usage: archive-loader patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]")
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
+        // Refused before the lock so a live session gets the clearer message,
+        // and again after, because the game can start during acquisition.
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
+        let lock = try InstallationLock.acquire(game: game)
+        defer { lock.release() }
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let patcher = RDARPatcher(game: game)
         let explicitTarget = options.value("--target").map { URL(fileURLWithPath: $0) }
         let strategy = options.value("--strategy") ?? "hybrid"
         let modURLs = modPaths.map { URL(fileURLWithPath: $0) }
-        let keep = try retentionCount(options.value("--keep"))
 
         switch strategy {
         case "hybrid":
@@ -216,16 +230,20 @@ struct ArchiveLoaderCLI {
                 )
             }
 
-            let summary = try patcher.apply(plan: plan, keepBackups: keep)
+            let summary = try patcher.apply(plan: plan)
             for archive in summary.archives {
                 print("  patched \(archive.targetArchive.lastPathComponent)")
                 print(
                     "    records=\(archive.patchedCount) replaced=\(archive.replacedCount)"
                         + " inserted=\(archive.insertedCount)"
                 )
-                print("    backup=\(archive.backupDirectory.path)")
             }
             if let loose = summary.looseArchive {
+                // Record it the way `run` does. Without this the file is
+                // unaccounted for, so restore leaves it behind for ever — and
+                // it is the loader's own output, not something a user chose to
+                // install by hand.
+                try ArtifactLedger(game: game).record([loose])
                 print("  looseArchive=\(loose.path)")
             }
             print("patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
@@ -234,12 +252,10 @@ struct ArchiveLoaderCLI {
                 let target = try patcher.chooseTarget(sourceArchive: modURL, explicitTarget: explicitTarget)
                 let summary = try patcher.patchAll(
                     sourceArchive: modURL,
-                    targetArchive: target,
-                    keepBackups: keep
+                    targetArchive: target
                 )
                 print("aggressively patched \(modURL.lastPathComponent) -> \(target.lastPathComponent)")
                 print("  records=\(summary.patchedCount) inserted=\(summary.insertedCount) replaced=\(summary.replacedCount)")
-                print("  backup=\(summary.backupDirectory.path)")
             }
         default:
             throw CLIError.usage("unknown strategy: \(strategy)")
@@ -272,6 +288,10 @@ struct ArchiveLoaderCLI {
         }
 
         let game = GameInstall(root: URL(fileURLWithPath: gamePath))
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
+        let lock = try InstallationLock.acquire(game: game)
+        defer { lock.release() }
+        try GameRunningGuard.refuseIfRunning(game: game, consequence: patchConsequence)
         let patcher = RDARPatcher(game: game)
         let summary = try patcher.patchHashes(
             sourceArchive: URL(fileURLWithPath: sourcePath),
@@ -286,49 +306,6 @@ struct ArchiveLoaderCLI {
                 + " inserted=" + String(summary.insertedCount)
                 + " replaced=" + String(summary.replacedCount)
         )
-        print("backup=" + summary.backupDirectory.path)
-    }
-
-    static func restore(_ args: [String]) throws {
-        let options = try Options(args)
-        guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: archive-loader restore --game GAME_DIR [--backup BACKUP_DIR | --latest]")
-        }
-        let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
-        if let backupPath = options.value("--backup") {
-            _ = try store.restore(backupDirectory: URL(fileURLWithPath: backupPath)) {
-                print("restored \($0.path)")
-            }
-        } else {
-            _ = try store.restoreLatest {
-                print("restored \($0.path)")
-            }
-        }
-    }
-
-    static func prune(_ args: [String]) throws {
-        let options = try Options(args)
-        guard let gamePath = options.value("--game") else {
-            throw CLIError.usage("usage: archive-loader prune --game GAME_DIR [--keep N] [--dry-run]")
-        }
-        let dryRun = args.contains("--dry-run")
-        let keep = try retentionCount(options.value("--keep"))
-        let store = BackupStore(game: GameInstall(root: URL(fileURLWithPath: gamePath)))
-        let removed = try store.prune(keep: keep, dryRun: dryRun)
-        for directory in removed {
-            print("\(dryRun ? "would prune" : "pruned") \(directory.path)")
-        }
-        if removed.isEmpty {
-            print("nothing to prune")
-        }
-    }
-
-    static func retentionCount(_ value: String?) throws -> Int {
-        guard let value else { return 3 }
-        guard let count = Int(value), count >= 0 else {
-            throw CLIError.usage("--keep requires a non-negative integer")
-        }
-        return count
     }
 
     static func printUsage() {
@@ -336,12 +313,14 @@ struct ArchiveLoaderCLI {
         archive-loader
 
         Commands:
+          setup [--game GAME_DIR] [--rebaseline] [--assume-clean]
+          run [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
-          patch --game GAME_DIR [--keep N] [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
-          restore --game GAME_DIR [--backup RUN_OR_ARCHIVE_DIR | --latest]
-          prune --game GAME_DIR [--keep N] [--dry-run]
+          patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
+          restore [--game GAME_DIR]
+          status [--game GAME_DIR] [--deep]
           --version
 
         Scope:
@@ -349,6 +328,8 @@ struct ArchiveLoaderCLI {
         """)
     }
 }
+
+ArchiveLoaderCLI.main()
 
 private struct DetectedGame: Encodable {
     let path: String

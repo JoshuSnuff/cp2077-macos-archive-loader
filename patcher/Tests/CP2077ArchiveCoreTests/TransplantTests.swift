@@ -152,7 +152,7 @@ import Testing
     #expect(patched.storedCRC == patched.computedCRC)
 }
 
-@Test func patchBacksUpEachTargetArchiveOnlyOncePerRun() throws {
+@Test func patchWithSeveralModsRewritesTheTargetOnce() throws {
     let game = try TestGame()
     defer { game.cleanUp() }
 
@@ -171,12 +171,7 @@ import Testing
     let summary = try RDARPatcher(game: game.install).apply(plan: plan)
 
     #expect(summary.archives.count == 1)
-    let backups = try FileManager.default.contentsOfDirectory(
-        at: game.install.backupDirectory,
-        includingPropertiesForKeys: nil,
-        options: [.skipsHiddenFiles]
-    )
-    #expect(backups.count == 1)
+    #expect(summary.archives[0].patchedCount == 2)
 
     // Both mods' payloads land, in one rewrite of the target.
     let patched = try RDARArchive.read(target)
