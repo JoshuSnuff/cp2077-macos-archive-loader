@@ -56,6 +56,8 @@ struct ArchiveLoaderCLI {
             try RestoreCommand.run(args)
         case "status":
             try StatusCommand.run(args)
+        case "cache":
+            try cache(args)
         case "version", "--version", "-v":
             print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
@@ -190,6 +192,39 @@ struct ArchiveLoaderCLI {
         }
     }
 
+    /// The escape hatch for the one thing the fingerprint cannot see: a mod
+    /// rewritten in place at the same size with its mtime preserved.
+    static func cache(_ args: [String]) throws {
+        guard args.first == "clear" else {
+            throw CLIError.usage("usage: archive-loader cache clear [--game GAME_DIR]")
+        }
+
+        var explicitGame: String?
+        var index = 1
+        while index < args.count {
+            guard args[index] == "--game" else {
+                throw CLIError.usage("usage: archive-loader cache clear [--game GAME_DIR]")
+            }
+            guard explicitGame == nil, index + 1 < args.count else {
+                throw CLIError.missingValue("--game")
+            }
+            let value = args[index + 1]
+            guard !value.hasPrefix("--") else { throw CLIError.missingValue("--game") }
+            explicitGame = value
+            index += 2
+        }
+
+        let candidates = try GameDiscovery.resolve(
+            explicitRoot: explicitGame.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        )
+        guard let candidate = candidates.first, candidates.count == 1 else {
+            throw CLIError.usage("could not resolve a single game installation; pass --game")
+        }
+        let game = GameInstall(root: candidate.root)
+        try PatchCacheStore(game: game).clear()
+        print("cleared \(game.cacheDirectory.path)")
+    }
+
     /// Both patch commands rewrite official archives in place.
     static let patchConsequence = "patching now would rewrite archives underneath it"
 
@@ -317,13 +352,14 @@ struct ArchiveLoaderCLI {
 
         Commands:
           setup [--debug] [--game GAME_DIR] [--rebaseline] [--assume-clean]
-          run [--debug] [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]
+          run [--debug] [--vanilla-on-error] [--no-cache] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
           patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
           restore [--debug] [--game GAME_DIR]
           status [--game GAME_DIR] [--deep]
+          cache clear [--game GAME_DIR]
           --version
 
         Scope:

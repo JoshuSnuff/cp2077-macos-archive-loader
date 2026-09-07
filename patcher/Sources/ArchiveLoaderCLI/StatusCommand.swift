@@ -63,6 +63,14 @@ enum StatusCommand {
         let mods = try ModCollection.enabledMods(game: game)
         print("Mods        \(mods.count) enabled")
 
+        // Reported, never judged. A cached generation says a previous run
+        // patched successfully; it says nothing about this install's state
+        // now, so it must not affect the pristine verdict below.
+        let generations = (try? FileManager.default.contentsOfDirectory(
+            atPath: game.cacheDirectory.path
+        ))?.filter { !$0.hasPrefix(".") }.count ?? 0
+        print("Cache       \(generations) patched image\(generations == 1 ? "" : "s")")
+
         if GameProcess.isRunning(game: game) {
             print("Game        RUNNING — archives are patched for this session")
         }

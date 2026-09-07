@@ -29,6 +29,7 @@ make_game() {
 make_game
 output="$("$BINARY" status --game "$GAME_DIR" 2>&1)" || fail "status failed on a clean install"
 case "$output" in *pristine*) ;; *) fail "did not report pristine: $output" ;; esac
+case "$output" in *"Cache       0 patched images"*) ;; *) fail "did not report an empty cache: $output" ;; esac
 
 # --- A same-size change is invisible shallow, caught by --deep --------------
 make_game

@@ -134,6 +134,11 @@ public struct BaselineStore: Sendable {
         )) ?? [] where entry != manifest.id {
             try? manager.removeItem(at: game.baselinesDirectory.appending(path: entry, directoryHint: .isDirectory))
         }
+
+        // Every cache generation is keyed on the baseline id that just stopped
+        // being current, so all of them are dead. Doing this here rather than
+        // at the three call sites means a new capture path cannot forget it.
+        try? PatchCacheStore(game: game).clear()
     }
 
     /// Clones every recorded archive from the published generation back over

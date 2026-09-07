@@ -1,4 +1,4 @@
-import CP2077ArchiveCore
+@testable import CP2077ArchiveCore
 import Foundation
 import Testing
 
@@ -118,6 +118,33 @@ private struct FakeProcess {
     #expect(!watcher.everSeen)
 }
 
+@Test func theWatcherReportsHowLongTheGameTookToAppear() throws {
+    let executable = URL(fileURLWithPath: "/nonexistent/Cyberpunk2077")
+    let sightings = LockedFlag()
+
+    let watcher = GameWatcher(
+        executable: executable,
+        gameRoot: nil,
+        expectedArchives: [],
+        archiveOpenSampleDelay: 0.01,
+        runningPIDs: { _ in sightings.value ? [pid_t(1)] : [] },
+        archiveSampler: { _, _ in nil }
+    )
+
+    watcher.start()
+    defer { watcher.stop() }
+    #expect(watcher.timeToFirstSighting == nil)
+    sightings.value = true
+    let deadline = Date().addingTimeInterval(5)
+    while watcher.timeToFirstSighting == nil && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+
+    let interval = try #require(watcher.timeToFirstSighting)
+    #expect(interval >= 0)
+    #expect(interval < 30)
+}
+
 @Test func theWaitGivesUpWhenNothingEverStarts() throws {
     let fake = try FakeProcess()
     defer { fake.cleanUp() }
@@ -149,4 +176,13 @@ private struct FakeProcess {
 
     #expect(GameProcess.executable(in: game).path
         == "/games/Cyberpunk 2077/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077")
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var flag = false
+    var value: Bool {
+        get { mutex.lock(); defer { mutex.unlock() }; return flag }
+        set { mutex.lock(); flag = newValue; mutex.unlock() }
+    }
 }

@@ -105,6 +105,13 @@ chmod 755 "$GAME_DIR/archive-loader/pristine/content" 2>/dev/null || true
 failed_log="$(one_file 'failed restore run log' "$LOG_DIR"/run-*.log)"
 tail -n 1 "$failed_log" | grep -q 'RESTORE FAILED' \
     || fail "failed restore log tail was not persisted"
+timing_count="$(grep -c 'Timing:' "$failed_log" || true)"
+[ "$timing_count" -eq 1 ] \
+    || fail "failed restore log expected one timing summary, found $timing_count"
+timing_line="$(grep -n 'Timing:' "$failed_log" | cut -d: -f1)"
+failure_line="$(grep -n 'RESTORE FAILED' "$failed_log" | tail -n 1 | cut -d: -f1)"
+[ "$timing_line" -lt "$failure_line" ] \
+    || fail "failed restore timing summary was not before RESTORE FAILED"
 
 # Logs are expected user data, not negative evidence. Setup must accept an
 # existing logs directory and leave its unrelated contents untouched.

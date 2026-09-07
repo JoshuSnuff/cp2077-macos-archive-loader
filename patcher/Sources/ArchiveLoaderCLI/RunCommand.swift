@@ -11,6 +11,7 @@ enum RunCommand {
     static func run(_ args: [String]) throws {
         var arguments = args
         var vanillaOnError = false
+        var useCache = true
         var explicitGame: String?
         var debug = ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
 
@@ -30,6 +31,9 @@ enum RunCommand {
             case "--vanilla-on-error":
                 vanillaOnError = true
                 index += 1
+            case "--no-cache":
+                useCache = false
+                index += 1
             case "--game":
                 guard index + 1 < arguments.count else { throw CLIError.missingValue("--game") }
                 explicitGame = arguments[index + 1]
@@ -41,7 +45,7 @@ enum RunCommand {
 
         guard let launcherPath = wrapped.first else {
             throw CLIError.usage(
-                "usage: archive-loader run [--debug] [--vanilla-on-error] [--game GAME_DIR] -- <launcher> [args...]"
+                "usage: archive-loader run [--debug] [--vanilla-on-error] [--no-cache] [--game GAME_DIR] -- <launcher> [args...]"
             )
         }
         let launcherArguments = Array(wrapped.dropFirst())
@@ -68,6 +72,7 @@ enum RunCommand {
                 launcher: launcher,
                 launcherArguments: launcherArguments,
                 vanillaOnError: vanillaOnError,
+                useCache: useCache,
                 log: log
             )
         }
@@ -81,6 +86,7 @@ enum RunCommand {
         launcher: URL,
         launcherArguments: [String],
         vanillaOnError: Bool,
+        useCache: Bool,
         log: SessionLog
     ) throws {
 
@@ -93,6 +99,10 @@ enum RunCommand {
 
         let lock = try InstallationLock.acquire(game: game)
         defer { lock.release() }
+        var timingSummaryReported = false
+        defer {
+            reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
+        }
 
         // The game could have started during lock acquisition. Never restore
         // under a session that won the race after the initial pre-lock check.
@@ -120,10 +130,15 @@ enum RunCommand {
         //    patched, and patching again on top would stack a second edit.
         log.step("Restoring \(manifest.archives.count) archives...")
         do {
-            try restore(store: store, ledger: ledger)
+            try log.timed("restore") { try restore(store: store, ledger: ledger) }
         } catch {
+            reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
             reportRestoreFailure(error, game: game, log: log)
-            exit(restoreFailureExitCode)
+            exitAfterReporting(
+                restoreFailureExitCode,
+                log: log,
+                timingSummaryReported: &timingSummaryReported
+            )
         }
 
         // 2. Patch, unless there is nothing to patch.
@@ -139,7 +154,10 @@ enum RunCommand {
                 patchedArchives = try patchAndVerify(
                     mods: mods,
                     game: game,
+                    manifest: manifest,
+                    store: store,
                     ledger: ledger,
+                    useCache: useCache,
                     log: log
                 )
             } catch {
@@ -149,12 +167,22 @@ enum RunCommand {
                 do {
                     try recordExistingManagedArtifact(game: game, ledger: ledger)
                 } catch {
+                    reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
                     reportRestoreFailure(error, game: game, log: log)
-                    exit(restoreFailureExitCode)
+                    exitAfterReporting(
+                        restoreFailureExitCode,
+                        log: log,
+                        timingSummaryReported: &timingSummaryReported
+                    )
                 }
                 if let restoreError = restoreQuietly(store: store, ledger: ledger, log: log) {
+                    reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
                     reportRestoreFailure(restoreError, game: game, log: log)
-                    exit(restoreFailureExitCode)
+                    exitAfterReporting(
+                        restoreFailureExitCode,
+                        log: log,
+                        timingSummaryReported: &timingSummaryReported
+                    )
                 }
 
                 guard vanillaOnError else {
@@ -168,8 +196,13 @@ enum RunCommand {
                 do {
                     try restore(store: store, ledger: ledger)
                 } catch {
+                    reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
                     reportRestoreFailure(error, game: game, log: log)
-                    exit(restoreFailureExitCode)
+                    exitAfterReporting(
+                        restoreFailureExitCode,
+                        log: log,
+                        timingSummaryReported: &timingSummaryReported
+                    )
                 }
             }
         }
@@ -210,8 +243,13 @@ enum RunCommand {
             // Even a launcher that never started leaves a patched install.
             launcherTarget.value = nil
             if let restoreError = restoreQuietly(store: store, ledger: ledger, log: log) {
+                reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
                 reportRestoreFailure(restoreError, game: game, log: log)
-                exit(restoreFailureExitCode)
+                exitAfterReporting(
+                    restoreFailureExitCode,
+                    log: log,
+                    timingSummaryReported: &timingSummaryReported
+                )
             }
             throw error
         }
@@ -220,17 +258,29 @@ enum RunCommand {
         waitForGameToFinish(game: game, watcher: watcher, log: log)
         watcher.stop()
         reportArchiveObservations(watcher.archiveObservation, game: game, log: log)
+        if let interval = watcher.timeToFirstSighting {
+            log.info(String(format: "The game appeared %.1fs after the launcher started", interval))
+        }
         let restoreError = restoreQuietly(store: store, ledger: ledger, log: log)
 
         let launcherCode = outcome.wasSignalled
             ? outcome.reportableCode
             : signalForwarder.receivedSignal.map { 128 + $0 } ?? outcome.reportableCode
         if let restoreError {
+            reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
             reportRestoreFailure(restoreError, game: game, launcherCode: launcherCode, log: log)
-            exit(restoreFailureExitCode)
+            exitAfterReporting(
+                restoreFailureExitCode,
+                log: log,
+                timingSummaryReported: &timingSummaryReported
+            )
         }
         if launcherCode != 0 {
-            exit(launcherCode)
+            exitAfterReporting(
+                launcherCode,
+                log: log,
+                timingSummaryReported: &timingSummaryReported
+            )
         }
     }
 
@@ -244,7 +294,10 @@ enum RunCommand {
     static func patchAndVerify(
         mods: [URL],
         game: GameInstall,
+        manifest: BaselineManifest,
+        store: BaselineStore,
         ledger: ArtifactLedger,
+        useCache: Bool,
         log: SessionLog
     ) throws -> Set<URL> {
         log.step("Patching with \(mods.count) mods...")
@@ -252,7 +305,32 @@ enum RunCommand {
             log.detail(mod.lastPathComponent)
         }
 
-        let plan = try PatchPlanner.plan(mods: mods, game: game)
+        let cache = PatchCacheStore(game: game)
+        let officialArchives = try game.officialMacArchives()
+
+        // Computed before anything is written, from the just-restored install.
+        var fingerprint: CacheFingerprint?
+        if useCache {
+            do {
+                let computed = try CacheFingerprint.compute(
+                    game: game,
+                    manifest: manifest,
+                    officialArchives: officialArchives,
+                    mods: mods
+                )
+                fingerprint = computed
+                log.debug { "cache fingerprint \(computed.value)\n\(computed.canonicalInput)" }
+            } catch {
+                // A cache is never worth failing a launch over.
+                log.warning("could not fingerprint the patch cache: \(error)")
+            }
+        }
+
+        // Built from the baseline in both cases, and before any cached archive
+        // is cloned over a live one.
+        let plan = try log.timed("plan") {
+            try PatchPlanner.plan(mods: mods, officialArchives: officialArchives)
+        }
         for loser in plan.losers {
             log.detail(
                 "conflict: \(Hashes.hex64(loser.hash)) in \(loser.modArchive.lastPathComponent)"
@@ -274,29 +352,126 @@ enum RunCommand {
             }
         }
 
-        let summary = try RDARPatcher(game: game).apply(plan: plan)
-        if let loose = summary.looseArchive {
-            try ledger.record([loose])
-        }
-        log.info("Patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
-        let patched = summary.archives.map(\.targetArchive) + [summary.looseArchive].compactMap { $0 }
+        // Non-nil exactly while this run is standing on a cached image. It is
+        // what the retry below discards, and clearing it is what bounds the
+        // retry to one attempt.
+        var cacheHit: CacheFingerprint?
+        var patched: [URL]
 
-        // A plan that cannot be verified is not one to play on.
-        let report = try PlanVerifier.verify(plan: plan, game: game)
-        guard report.isClean else {
-            for archive in report.archives where !archive.isClean {
-                log.detail("BAD \(archive.archive.lastPathComponent)")
-                for issue in archive.issues {
-                    log.detail("    ! \(issue)")
-                }
+        var cached: CacheManifest?
+        if let fingerprint {
+            do {
+                cached = try cache.lookUp(fingerprint)
+            } catch {
+                log.warning("could not look up the patch cache: \(error)")
             }
+        }
+
+        if let fingerprint, let cached {
+            do {
+                patched = try log.timed("clone") {
+                    try cache.apply(cached, fingerprint: fingerprint)
+                }
+                if let loosePath = cached.looseArchive {
+                    try ledger.record([game.macArchiveDirectory.appending(path: loosePath)])
+                }
+                cacheHit = fingerprint
+                log.info("Reused the cached patched image (\(patched.count) archives)")
+            } catch {
+                // apply() can have replaced some archives before a later
+                // clone fails. The cache is optional, but the live install
+                // must be returned to the baseline before patching normally.
+                log.warning("could not apply the cached patched image: \(error)")
+                try recordExistingManagedArtifact(game: game, ledger: ledger)
+                try restore(store: store, ledger: ledger)
+                patched = try applyPlan(plan: plan, game: game, ledger: ledger, log: log)
+            }
+        } else {
+            patched = try applyPlan(plan: plan, game: game, ledger: ledger, log: log)
+        }
+
+        // Unchanged on both paths: a cache hit is held to exactly the standard
+        // a fresh patch is held to, which is what keeps the fingerprint a
+        // performance input rather than a correctness one.
+        var report: VerificationReport?
+        do {
+            report = try log.timed("verify") { try PlanVerifier.verify(plan: plan, game: game) }
+        } catch {
+            // A cached archive damaged badly enough that it will not parse
+            // makes the verifier throw rather than report. On the cache path
+            // that is still just a bad generation; anywhere else it is the
+            // existing failure.
+            guard cacheHit != nil else { throw error }
+            log.warning("the cached patched image could not be read: \(error)")
+        }
+
+        if let hit = cacheHit, report?.isClean != true {
+            // The generation is wrong or damaged. It must cost a slow launch,
+            // never a failed one.
+            log.warning("the cached patched image failed verification; discarding it and patching")
+            if let report { reportVerificationFailure(report, log: log) }
+            do {
+                try cache.discard(hit)
+            } catch {
+                log.warning("could not discard the cached patched image: \(error)")
+            }
+            try restore(store: store, ledger: ledger)
+            patched = try applyPlan(plan: plan, game: game, ledger: ledger, log: log)
+            cacheHit = nil
+            report = try log.timed("verify") { try PlanVerifier.verify(plan: plan, game: game) }
+        }
+
+        guard let report, report.isClean else {
+            if let report { reportVerificationFailure(report, log: log) }
             throw CLIError.usage("verification failed after patching")
         }
         log.info(
             "Verified \(report.matchingRecordCount) records match the plan"
                 + " across \(report.archives.count) archives"
         )
+
+        if let fingerprint, cacheHit == nil {
+            do {
+                let stored = try log.timed("cache") {
+                    try cache.store(
+                        fingerprint: fingerprint,
+                        baseline: manifest,
+                        patchedArchives: patched,
+                        looseArchive: patched.first { $0 == game.managedLooseArchive.normalizedFileURL }
+                    )
+                }
+                log.info("Cached the patched image (\(stored.archives.count) archives)")
+            } catch {
+                log.warning("could not cache the patched image: \(error)")
+            }
+        }
+
         return Set(patched.map(\.normalizedFileURL))
+    }
+
+    /// The write half of a run: rewrite the official archives the plan names.
+    private static func applyPlan(
+        plan: PatchPlan,
+        game: GameInstall,
+        ledger: ArtifactLedger,
+        log: SessionLog
+    ) throws -> [URL] {
+        let summary = try log.timed("patch") { try RDARPatcher(game: game).apply(plan: plan) }
+        if let loose = summary.looseArchive {
+            try ledger.record([loose])
+        }
+        log.info("Patched \(summary.overrideRecordCount) records across \(summary.archives.count) archives")
+        return (summary.archives.map(\.targetArchive) + [summary.looseArchive].compactMap { $0 })
+            .map(\.normalizedFileURL)
+    }
+
+    private static func reportVerificationFailure(_ report: VerificationReport, log: SessionLog) {
+        for archive in report.archives where !archive.isClean {
+            log.detail("BAD \(archive.archive.lastPathComponent)")
+            for issue in archive.issues {
+                log.detail("    ! \(issue)")
+            }
+        }
     }
 
     /// The launcher exiting is not the session ending.
@@ -407,6 +582,21 @@ enum RunCommand {
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func reportTimingsIfNeeded(log: SessionLog, alreadyReported: inout Bool) {
+        guard !alreadyReported else { return }
+        log.reportTimings()
+        alreadyReported = true
+    }
+
+    private static func exitAfterReporting(
+        _ status: Int32,
+        log: SessionLog,
+        timingSummaryReported: inout Bool
+    ) -> Never {
+        reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
+        exit(status)
     }
 }
 

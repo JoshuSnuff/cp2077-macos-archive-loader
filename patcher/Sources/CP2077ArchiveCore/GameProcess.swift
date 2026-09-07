@@ -159,6 +159,8 @@ public final class GameWatcher: @unchecked Sendable {
     private let archiveSampler: (pid_t, URL) -> Set<URL>?
     private let mutex = NSLock()
     private var seen = false
+    private var startedAt: Date?
+    private var firstSeenAt: Date?
     private var running = false
     private var firstSampleAt: Date?
     private var sampleAttempts = 0
@@ -209,6 +211,16 @@ public final class GameWatcher: @unchecked Sendable {
         return ArchiveObservation(expected: expectedArchives, samples: archiveSamples)
     }
 
+    /// How long after `start()` the game was first observed running, or nil if it
+    /// never was. This is the launcher-to-game interval; the game's own loading
+    /// happens after it and is not measured here.
+    public var timeToFirstSighting: TimeInterval? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        guard let startedAt, let firstSeenAt else { return nil }
+        return firstSeenAt.timeIntervalSince(startedAt)
+    }
+
     public func start() {
         let thread = Thread { [weak self] in
             while let self, self.isRunning {
@@ -223,6 +235,7 @@ public final class GameWatcher: @unchecked Sendable {
         thread.stackSize = 512 * 1024
         mutex.lock()
         running = true
+        startedAt = Date()
         self.thread = thread
         mutex.unlock()
         thread.start()
@@ -252,7 +265,10 @@ public final class GameWatcher: @unchecked Sendable {
 
     private func markSeen() {
         mutex.lock()
-        seen = true
+        if !seen {
+            seen = true
+            firstSeenAt = Date()
+        }
         mutex.unlock()
     }
 

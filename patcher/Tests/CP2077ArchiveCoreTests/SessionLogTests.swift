@@ -206,6 +206,53 @@ private func read(_ url: URL) throws -> String {
     #expect(try read(fixture.standardError).isEmpty)
 }
 
+@Test func timedPhasesAreRecordedInTheOrderTheyRan() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "session-timing-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let log = try SessionLog(command: "run", logsDirectory: directory)
+    log.timed("restore") { }
+    let value = log.timed("patch") { 7 }
+
+    #expect(value == 7)
+    #expect(log.timings.map(\.phase) == ["restore", "patch"])
+    #expect(log.timings.allSatisfy { $0.seconds >= 0 })
+}
+
+@Test func aThrowingPhaseIsStillTimed() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "session-timing-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    struct Boom: Error {}
+    let log = try SessionLog(command: "run", logsDirectory: directory)
+
+    #expect(throws: Boom.self) {
+        try log.timed("patch") { throw Boom() }
+    }
+    #expect(log.timings.map(\.phase) == ["patch"])
+}
+
+@Test func reportTimingsWritesOneSummaryLineAndNothingWhenNoPhaseRan() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appending(path: "session-timing-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let empty = try SessionLog(command: "run", logsDirectory: directory)
+    empty.reportTimings()
+    #expect(!(try String(contentsOf: empty.textLogURL, encoding: .utf8)).contains("Timing:"))
+
+    let log = try SessionLog(command: "run", logsDirectory: directory)
+    log.timed("restore") { }
+    log.reportTimings()
+
+    let text = try String(contentsOf: log.textLogURL, encoding: .utf8)
+    let summaries = text.split(separator: "\n").filter { $0.contains("Timing:") }
+    #expect(summaries.count == 1)
+    #expect(summaries[0].contains("restore "))
+}
+
 @Test func archiveObservationFiltersDescriptorsToArchivesUnderTheGameRoot() {
     let root = URL(fileURLWithPath: "/games/Cyberpunk 2077", isDirectory: true)
 

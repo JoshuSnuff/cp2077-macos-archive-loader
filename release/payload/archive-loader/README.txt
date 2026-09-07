@@ -16,6 +16,14 @@ LAUNCH
   archive-loader wraps your launcher. It does not edit or replace it, and
   it works the same with launch_red4ext.sh or any script of your own.
 
+  An unchanged set of mods, game files, official archives, and baseline can
+  reuse the previous run's cached patched image instead of rewriting archives.
+  A cache hit still builds the full patch plan and runs the same verification as
+  a fresh patch; use --no-cache to force a full patch or use `cache clear` to
+  discard cached images. Two cache generations are retained, and the
+  fingerprint can miss only an in-place mod rewrite that preserves its size,
+  mtime, and inode.
+
 RECOVER
   If the game or your Mac crashes mid-session, the official archives are left
   patched. Put them back with:

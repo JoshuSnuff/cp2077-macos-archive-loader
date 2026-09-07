@@ -56,6 +56,14 @@ launcher script, setup prints a command that runs the game itself.
 `archive-loader` wraps your launcher — it never edits or replaces it, so it
 works alongside a REDscript or RED4ext setup you already have.
 
+After a successful run, a later run with the same mods, game version, official
+archive set, and baseline reuses the cached patched image instead of rewriting
+the archives. A cache hit still builds the full patch plan and runs the same
+verification as a fresh patch. Add `--no-cache` to force a full patch, or run
+`cache clear` to discard cached images; the two most recent images are retained.
+The fingerprint can miss only an in-place mod rewrite that preserves its size,
+mtime, and inode.
+
 To keep using the Play button in your storefront, add the wrapper there:
 
 | Launcher | Where | What to enter |

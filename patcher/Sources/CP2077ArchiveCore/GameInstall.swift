@@ -11,6 +11,10 @@ public struct GameInstall: Sendable {
         root.appending(path: "archive/Mac/content", directoryHint: .isDirectory)
     }
 
+    public var macArchiveDirectory: URL {
+        root.appending(path: "archive/Mac", directoryHint: .isDirectory)
+    }
+
     public var macEP1ArchiveDirectory: URL {
         root.appending(path: "archive/Mac/ep1", directoryHint: .isDirectory)
     }
@@ -23,6 +27,14 @@ public struct GameInstall: Sendable {
     /// Captured baseline generations. Each subdirectory is one generation.
     public var baselinesDirectory: URL {
         loaderDirectory.appending(path: "baselines", directoryHint: .isDirectory)
+    }
+
+    /// Cloned patched images, one directory per fingerprint.
+    ///
+    /// Purely an optimization: deleting this directory at any moment is safe and
+    /// costs only the time of one more patch.
+    public var cacheDirectory: URL {
+        loaderDirectory.appending(path: "cache", directoryHint: .isDirectory)
     }
 
     /// Symlink to the published generation. Switching it is the single commit

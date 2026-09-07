@@ -64,6 +64,11 @@ public enum Hashes {
         }) {}
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+
+    /// SHA-256 of an in-memory value, lowercase hex.
+    public static func sha256Hex(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 extension String {
@@ -72,4 +77,3 @@ extension String {
         return String(repeating: String(character), count: length - count) + self
     }
 }
-

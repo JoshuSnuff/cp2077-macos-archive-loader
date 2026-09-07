@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+/// How long one phase of a session took.
+public struct PhaseTiming: Sendable, Equatable {
+    public let phase: String
+    public let seconds: Double
+}
+
 /// One durable record of a user-facing loader command.
 ///
 /// Terminal output and its text-log counterpart share this one path so a fact
@@ -17,6 +23,7 @@ public final class SessionLog {
     private let standardError: FileHandle
     private let mutex = NSLock()
     private var stepNumber = 0
+    private var phaseTimings: [PhaseTiming] = []
 
     public init(
         command: String,
@@ -113,6 +120,47 @@ public final class SessionLog {
     /// recording it as one complete, immediately durable text-log line.
     public func prompt(_ message: String) {
         emit(message, level: "prompt", terminal: standardOutput, terminalNewline: false)
+    }
+
+    /// Runs `body`, recording how long it took under `phase`.
+    ///
+    /// A throwing phase is recorded too: how long a run spent before failing is
+    /// the evidence a slow failure needs, and discarding it on the error path
+    /// would lose exactly the case worth measuring.
+    @discardableResult
+    public func timed<T>(_ phase: String, _ body: () throws -> T) rethrows -> T {
+        let start = ContinuousClock.now
+        do {
+            let value = try body()
+            record(phase: phase, since: start)
+            return value
+        } catch {
+            record(phase: phase, since: start)
+            throw error
+        }
+    }
+
+    public var timings: [PhaseTiming] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return phaseTimings
+    }
+
+    /// Emits one summary line, or nothing at all when no phase was timed.
+    public func reportTimings() {
+        let recorded = timings
+        guard !recorded.isEmpty else { return }
+        let parts = recorded.map { String(format: "%@ %.2fs", $0.phase, $0.seconds) }
+        info("Timing: " + parts.joined(separator: ", "))
+    }
+
+    private func record(phase: String, since start: ContinuousClock.Instant) {
+        let elapsed = ContinuousClock.now - start
+        let seconds = Double(elapsed.components.seconds)
+            + Double(elapsed.components.attoseconds) / 1e18
+        mutex.lock()
+        phaseTimings.append(PhaseTiming(phase: phase, seconds: seconds))
+        mutex.unlock()
     }
 
     /// Debug details are deliberately lazy: archive-record expansion can be
