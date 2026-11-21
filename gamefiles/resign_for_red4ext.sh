@@ -31,7 +31,7 @@ if relative_executable != "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077":
 
 executable = root / relative_executable
 info_path = root / "Cyberpunk2077.app/Contents/Info.plist"
-gog_path = root / "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+gog_path = root / "Contents/Resources/goggame-1423049311.info"
 try:
     binary = executable.read_bytes()
     with info_path.open("rb") as stream:

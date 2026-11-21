@@ -41,10 +41,7 @@ function fixture(overrides = {}) {
         'Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077'
     );
     fs.mkdirSync(path.dirname(executablePath), { recursive: true });
-    fs.mkdirSync(
-        path.join(gameDir, 'Cyberpunk2077.app/Contents/Resources'),
-        { recursive: true }
-    );
+    fs.mkdirSync(path.join(gameDir, 'Contents/Resources'), { recursive: true });
     fs.mkdirSync(path.join(gameDir, 'archive-loader/compatibility'), { recursive: true });
     makeExecutable(executablePath);
 
@@ -58,7 +55,7 @@ function fixture(overrides = {}) {
     fs.writeFileSync(
         path.join(
             gameDir,
-            'Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info'
+            'Contents/Resources/goggame-1423049311.info'
         ),
         JSON.stringify({ buildId: '60152051833789151' })
     );
@@ -95,7 +92,7 @@ function fixture(overrides = {}) {
                 key: 'CFBundleVersion'
             },
             gogBuildId: {
-                path: 'Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info',
+                path: 'Contents/Resources/goggame-1423049311.info',
                 key: 'buildId'
             },
             architecture: {
@@ -176,7 +173,7 @@ if (gateCase === 'all' || gateCase === 'missing') {
     fs.rmSync(
         path.join(
             missing.gameDir,
-            'Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info'
+            'Contents/Resources/goggame-1423049311.info'
         )
     );
     const calls = runHooks(missing);
@@ -194,7 +191,7 @@ if (gateCase === 'all' || gateCase === 'mismatch') {
     fs.writeFileSync(
         path.join(
             mismatched.gameDir,
-            'Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info'
+            'Contents/Resources/goggame-1423049311.info'
         ),
         JSON.stringify({ buildId: 'wrong-build' })
     );

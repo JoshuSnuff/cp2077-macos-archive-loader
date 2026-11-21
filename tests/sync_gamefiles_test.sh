@@ -63,7 +63,7 @@ esac
 [ ! -e "$GAME_DIR/archive-loader/state" ] || fail "UTF-8 failure created transaction state"
 cp "$valid_manifest" "$MANIFEST"
 
-metadata="$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+metadata="$GAME_DIR/Contents/Resources/goggame-1423049311.info"
 cp "$metadata" "$GAME_DIR/goggame-1423049311.info"
 mv "$metadata" "$WORK_DIR/resources-gog.info"
 if run_sync >/dev/null 2>&1; then fail "push accepted root-level GOG metadata"; fi

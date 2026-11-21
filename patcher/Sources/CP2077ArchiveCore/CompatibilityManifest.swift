@@ -128,7 +128,7 @@ public struct CompatibilityMetadataSources: Codable, Equatable, Sendable {
             key: "CFBundleVersion"
         ),
         gogBuildId: CompatibilityMetadataSource(
-            path: "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info",
+            path: "Contents/Resources/goggame-1423049311.info",
             key: "buildId"
         ),
         architecture: CompatibilityMetadataSource(

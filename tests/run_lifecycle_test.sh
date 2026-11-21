@@ -55,7 +55,7 @@ write_compatibility_manifest() {
       "key": "CFBundleVersion"
     },
     "gogBuildId": {
-      "path": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info",
+        "path": "Contents/Resources/goggame-1423049311.info",
       "key": "buildId"
     },
     "architecture": {
@@ -89,7 +89,7 @@ make_game() {
     rm -rf "$GAME_DIR"
     mkdir -p \
         "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
-        "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" \
+        "$GAME_DIR/Contents/Resources" \
         "$GAME_DIR/archive/Mac/content"
     cp "$WORK_DIR/fakegame" "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
     plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
@@ -98,7 +98,7 @@ make_game() {
     plutil -insert CFBundleVersion -string 5814786 \
         "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
     printf '{"buildId":"60152051833789151"}\n' \
-        > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+        > "$GAME_DIR/Contents/Resources/goggame-1423049311.info"
     printf 'vanilla-bytes' > "$CONTENT"
     "$BINARY" setup --game "$GAME_DIR" --assume-clean > /dev/null || fail "setup failed"
     write_compatibility_manifest
@@ -143,7 +143,7 @@ fi
 if [ "$GATE_CASE" = "all" ] || [ "$GATE_CASE" = "mismatch" ]; then
     make_game
     printf '{"buildId":"wrong-build"}\n' \
-        > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+        > "$GAME_DIR/Contents/Resources/goggame-1423049311.info"
     assert_gate_refuses_before_mutation "mismatched Resources build ID"
 fi
 
@@ -237,7 +237,7 @@ esac
 rm -rf "$GAME_DIR"
 mkdir -p \
     "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
-    "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" \
+    "$GAME_DIR/Contents/Resources" \
     "$GAME_DIR/archive/Mac/content"
 cp "$WORK_DIR/fakegame" "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
 plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
@@ -246,7 +246,7 @@ plutil -insert CFBundleShortVersionString -string 2.5.0 \
 plutil -insert CFBundleVersion -string 5814786 \
     "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
 printf '{"buildId":"60152051833789151"}\n' \
-    > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+    > "$GAME_DIR/Contents/Resources/goggame-1423049311.info"
 printf 'vanilla-bytes' > "$CONTENT"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$GAME_DIR/launch.sh"
 chmod +x "$GAME_DIR/launch.sh"

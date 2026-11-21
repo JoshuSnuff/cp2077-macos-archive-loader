@@ -8,7 +8,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 GAME_DIR="$WORK_DIR/game"
 EXECUTABLE="$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
-mkdir -p "$(dirname "$EXECUTABLE")" "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" "$GAME_DIR/archive-loader/compatibility"
+mkdir -p "$(dirname "$EXECUTABLE")" "$GAME_DIR/Contents/Resources" "$GAME_DIR/archive-loader/compatibility"
 
 python3 - "$GAME_DIR" <<'PY'
 import hashlib
@@ -33,7 +33,7 @@ binary.write_bytes(payload)
     <key>CFBundleVersion</key><string>5814786</string>
     </dict></plist>"""
 )
-(root / "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info").write_text(
+(root / "Contents/Resources/goggame-1423049311.info").write_text(
     json.dumps({"buildId": "60152051833789151"})
 )
 manifest = {

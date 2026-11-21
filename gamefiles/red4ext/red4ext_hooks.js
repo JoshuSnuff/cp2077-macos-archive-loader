@@ -126,7 +126,7 @@ const AUTHORITATIVE_METADATA = Object.freeze({
     infoPlistPath: 'Cyberpunk2077.app/Contents/Info.plist',
     versionKey: 'CFBundleShortVersionString',
     bundleVersionKey: 'CFBundleVersion',
-    gogInfoPath: 'Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info',
+    gogInfoPath: 'Contents/Resources/goggame-1423049311.info',
     gogBuildIdKey: 'buildId'
 });
 

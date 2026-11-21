@@ -14,7 +14,7 @@
     {
       "gamePath": "archive-loader/compatibility/manifest.json",
       "packagePath": "archive-loader/compatibility/manifest.json",
-      "sha256": "1ce39bbd8badb5380a4ea6c901511d54807c5bf2dd81ccd884ac9bdaa5b05188"
+      "sha256": "795482b970604ff65775cb930cb740d62947959540966caaf80fcfd018ddf69a"
     },
     {
       "gamePath": "red4ext/FridaGadget.config",
@@ -44,7 +44,7 @@
     {
       "gamePath": "red4ext/red4ext_hooks.js",
       "packagePath": "archive-loader/red4ext/red4ext_hooks.js",
-      "sha256": "52bf4759079a1fb7b8bd380af264d20090083a5562a97efeca52dd3309d81a56"
+      "sha256": "6d564be45201a07e917bb8fc77a9779dda00ba65b54effe41877dbeb347e4950"
     },
     {
       "gamePath": "red4ext_entitlements.plist",
@@ -54,7 +54,7 @@
     {
       "gamePath": "resign_for_red4ext.sh",
       "packagePath": "archive-loader/resign_for_red4ext.sh",
-      "sha256": "8c87d7ba01fdaa0de750d68e5f7a530b3bb7f4725a6403b37a1d405692f44124"
+      "sha256": "e496cb512d4fbc8fa0444b50fa7cd305f5008542f20a6be2c0f99890e60f7f3a"
     },
     {
       "gamePath": "archive-loader/setup.command",
@@ -87,7 +87,7 @@
     },
     "gogBuildId": {
       "key": "buildId",
-      "path": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+      "path": "Contents/Resources/goggame-1423049311.info"
     },
     "version": {
       "key": "CFBundleShortVersionString",

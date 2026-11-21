@@ -60,7 +60,7 @@ manifest_records() {
 
 validate_identity() {
     local plist="$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
-    local gog="$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+    local gog="$GAME_DIR/Contents/Resources/goggame-1423049311.info"
     local executable="$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
     [ -f "$plist" ] && [ -f "$gog" ] && [ -f "$executable" ] || {
         log "ERROR: authoritative game identity inputs are incomplete"; return 1;

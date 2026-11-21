@@ -18,7 +18,7 @@ mkdir -p \
     "$PACKAGE_ROOT/archive-loader/compatibility" \
     "$PACKAGE_ROOT/archive-loader/red4ext" \
     "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
-    "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" \
+    "$GAME_DIR/Contents/Resources" \
     "$EVIDENCE_DIR" \
     "$STUB_DIR"
 
@@ -35,7 +35,7 @@ plutil -insert CFBundleShortVersionString -string 2.5.0 \
 plutil -insert CFBundleVersion -string 5814786 \
     "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
 printf '{"buildId":"60152051833789151","fixture":"SYNTHETIC-NOT-PRODUCTION"}\n' \
-    > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+    > "$GAME_DIR/Contents/Resources/goggame-1423049311.info"
 
 cat > "$STUB_DIR/lipo" <<'EOF'
 #!/usr/bin/env bash
@@ -88,7 +88,7 @@ manifest = {
         "bundleVersion": {"key": "CFBundleVersion", "path": "Cyberpunk2077.app/Contents/Info.plist"},
         "executableSha256": {"command": "shasum -a 256", "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"},
         "executableUuid": {"command": "otool -arch arm64 -l", "loadCommand": "LC_UUID", "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"},
-        "gogBuildId": {"key": "buildId", "path": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"},
+        "gogBuildId": {"key": "buildId", "path": "Contents/Resources/goggame-1423049311.info"},
         "version": {"key": "CFBundleShortVersionString", "path": "Cyberpunk2077.app/Contents/Info.plist"},
     },
     "schema": "cp2077-compatibility/v1",
@@ -133,7 +133,7 @@ provenance = {
         "executableSha256": manifest["target"]["executable"]["sha256"],
         "executableUUID": manifest["target"]["executable"]["uuid"],
         "metadataContents": "SYNTHETIC-NOT-PRODUCTION buildId=60152051833789151",
-        "metadataPath": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info",
+        "metadataPath": "Contents/Resources/goggame-1423049311.info",
     },
 }
 (evidence_root / "provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")

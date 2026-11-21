@@ -167,7 +167,7 @@ def load(path):
     expected_sources = {
         "version": {"path": "Cyberpunk2077.app/Contents/Info.plist", "key": "CFBundleShortVersionString"},
         "bundleVersion": {"path": "Cyberpunk2077.app/Contents/Info.plist", "key": "CFBundleVersion"},
-        "gogBuildId": {"path": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info", "key": "buildId"},
+        "gogBuildId": {"path": "Contents/Resources/goggame-1423049311.info", "key": "buildId"},
         "architecture": {"path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077", "command": "lipo -archs"},
         "executableUuid": {"path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077", "command": "otool -arch arm64 -l", "loadCommand": "LC_UUID"},
         "executableSha256": {"path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077", "command": "shasum -a 256"},
