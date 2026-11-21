@@ -106,7 +106,10 @@ validate_sources() {
 
 write_transaction_marker() {
     local transaction_id="$1" phase="$2"
-    local marker_dir="$GAME_DIR/archive-loader/state/install-transactions"
+    # Keep shell-sync markers separate from Swift installer markers. Their
+    # schemas and recovery owners differ; sharing the directory makes a later
+    # `setup` attempt to decode a shell marker as a Swift transaction.
+    local marker_dir="$GAME_DIR/archive-loader/state/sync-transactions"
     local marker="$marker_dir/$transaction_id.json"
     local temporary="$marker.tmp"
     mkdir -p "$marker_dir"

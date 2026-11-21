@@ -84,7 +84,7 @@ run_sync --check >/dev/null || fail "check failed after a matching push"
 transaction_id="$(sed -n 's/.*TRANSACTION_COMMITTED: //p' "$LOG_FILE" | tail -n 1)"
 [ -n "$transaction_id" ] || fail "push did not report a committed transaction"
 snapshot_dir="$GAME_DIR/archive-loader/state/install-snapshots/$transaction_id"
-marker="$GAME_DIR/archive-loader/state/install-transactions/$transaction_id.json"
+marker="$GAME_DIR/archive-loader/state/sync-transactions/$transaction_id.json"
 [ -f "$snapshot_dir/snapshot.json" ] || fail "push did not create a snapshot record"
 [ "$(jq -r --arg path 'red4ext/absent.txt' '.managed[] | select(.gamePath == $path) | .present' "$snapshot_dir/snapshot.json")" = "false" ] \
     || fail "snapshot did not record an absent destination"
@@ -119,7 +119,7 @@ if ARCHIVE_LOADER_SYNC_FAIL_AFTER_REPLACEMENTS=1 run_sync >/dev/null 2>&1; then 
 [ "$(cat "$loader_game")" = "pre-rollback loader bytes" ] || fail "rollback did not restore the first replaced file"
 [ "$(cat "$runtime_game")" = "pre-rollback game bytes" ] || fail "rollback did not restore present bytes"
 [ ! -e "$absent_game" ] || fail "rollback did not restore absent path"
-rolled_back_marker="$(find "$GAME_DIR/archive-loader/state/install-transactions" -name '*.json' -type f -print0 \
+rolled_back_marker="$(find "$GAME_DIR/archive-loader/state/sync-transactions" -name '*.json' -type f -print0 \
     | xargs -0 grep -l '"phase": "rolled-back"' | tail -n 1)"
 [ -n "$rolled_back_marker" ] || fail "failure did not retain rolled-back marker"
 
