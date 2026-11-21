@@ -58,6 +58,8 @@ enum SetupCommand {
         // The game can start while the lock is being acquired.
         try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
 
+        try installCompatibilityPackageIfPresent(game: game, log: log)
+
         log.info("Game     \(game.root.path)")
         log.info("Version  \(candidate.version)  (\(candidate.sources.joined(separator: "+")))")
         log.info()
@@ -86,6 +88,30 @@ enum SetupCommand {
         }
 
         printLaunchCommand(game: game, log: log)
+    }
+
+    /// The zip is extracted at the game root, so its zip-root package paths
+    /// are also the source root for the transactional installer. Keep this
+    /// before baseline capture: a release with a bad native payload must not
+    /// leave a half-installed runtime behind.
+    private static func installCompatibilityPackageIfPresent(
+        game: GameInstall,
+        log: SessionLog
+    ) throws {
+        let manifestURL = game.root.appending(path: "archive-loader/compatibility/manifest.json")
+        guard FileManager.default.isReadableFile(atPath: manifestURL.path) else {
+            return
+        }
+        let document = try CompatibilityManifestDocument(bytes: Data(contentsOf: manifestURL))
+        let identity = try CompatibilityIdentityReader.read(root: game.root, manifest: document.manifest)
+        try CompatibilityIdentityValidator.requireMatch(target: document.manifest.target, actual: identity)
+        let service = InstallationTransactionService(gameRoot: game.root)
+        let marker = try service.install(
+            manifestDocument: document,
+            packageRoot: game.root,
+            verifiedIdentity: identity
+        )
+        log.info("Compatibility package installed transactionally (\(marker.transactionID))")
     }
 
     /// A capture clones the archives a live session is reading, and a

@@ -112,6 +112,24 @@ enum RunCommand {
             consequence: "restoring now would rewrite archives underneath it"
         )
 
+        // Compatibility is the authority for whether this installation may
+        // be touched at all. Keep this before baseline restoration, patching,
+        // watcher setup, and every path to LaunchSupervisor.run.
+        try log.timed("compatibility") {
+            let manifestURL = game.root.appending(
+                path: "archive-loader/compatibility/manifest.json"
+            )
+            let compatibilityManifest = try CompatibilityManifest.load(from: manifestURL)
+            let identity = try CompatibilityIdentityReader.read(
+                root: game.root,
+                manifest: compatibilityManifest
+            )
+            try CompatibilityIdentityValidator.requireMatch(
+                target: compatibilityManifest.target,
+                actual: identity
+            )
+        }
+
         guard let manifest = try store.publishedManifest() else {
             throw CLIError.usage(
                 "no baseline has been captured for this installation."

@@ -10,6 +10,7 @@ FIXTURES="$REPOSITORY_DIR/tests/fixtures"
 
 WORK_DIR="$(mktemp -d /private/tmp/archive-loader-lifecycle-test.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+GATE_CASE="${ARCHIVE_LOADER_GATE_CASE:-all}"
 
 fail() { echo "ERROR: $1" >&2; exit 1; }
 
@@ -17,21 +18,139 @@ cc -o "$WORK_DIR/fakegame" "$FIXTURES/fakegame.c"
 GAME_DIR="$WORK_DIR/Cyberpunk 2077"
 CONTENT="$GAME_DIR/archive/Mac/content/basegame_1_engine.archive"
 
+write_compatibility_manifest() {
+    local executable="$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
+    local manifest="$GAME_DIR/archive-loader/compatibility/manifest.json"
+    local executable_hash executable_uuid masked_hash manifest_hash
+
+    executable_hash="$(shasum -a 256 "$executable" | awk '{print $1}')"
+    executable_uuid="$(otool -l "$executable" | awk '$1 == "uuid" { print tolower($2); exit }')"
+    masked_hash="$(printf '0%.0s' {1..64})"
+    mkdir -p "$(dirname "$manifest")"
+    cat > "$manifest" <<JSON
+{
+  "schema": "cp2077-compatibility/v1",
+  "loaderVersion": "0.1.3",
+  "target": {
+    "game": "Cyberpunk 2077",
+    "distribution": "gog",
+    "platform": "macos",
+    "architecture": "arm64",
+    "version": "2.5.0",
+    "bundleVersion": "5814786",
+    "gogBuildId": "60152051833789151",
+    "executable": {
+      "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077",
+      "uuid": "$executable_uuid",
+      "sha256": "$executable_hash"
+    }
+  },
+  "metadataSources": {
+    "version": {
+      "path": "Cyberpunk2077.app/Contents/Info.plist",
+      "key": "CFBundleShortVersionString"
+    },
+    "bundleVersion": {
+      "path": "Cyberpunk2077.app/Contents/Info.plist",
+      "key": "CFBundleVersion"
+    },
+    "gogBuildId": {
+      "path": "Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info",
+      "key": "buildId"
+    },
+    "architecture": {
+      "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077",
+      "command": "lipo -archs"
+    },
+    "executableUuid": {
+      "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077",
+      "command": "otool -arch arm64 -l",
+      "loadCommand": "LC_UUID"
+    },
+    "executableSha256": {
+      "path": "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077",
+      "command": "shasum -a 256"
+    }
+  },
+  "managedFiles": [
+    {
+      "packagePath": "archive-loader/compatibility/manifest.json",
+      "gamePath": "archive-loader/compatibility/manifest.json",
+      "sha256": "$masked_hash"
+    }
+  ]
+}
+JSON
+    manifest_hash="$(shasum -a 256 "$manifest" | awk '{print $1}')"
+    perl -0pi -e "s/$masked_hash/$manifest_hash/" "$manifest"
+}
+
 make_game() {
     rm -rf "$GAME_DIR"
-    mkdir -p "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" "$GAME_DIR/archive/Mac/content"
+    mkdir -p \
+        "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
+        "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" \
+        "$GAME_DIR/archive/Mac/content"
     cp "$WORK_DIR/fakegame" "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
     plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
-    plutil -insert CFBundleShortVersionString -string 2.3.1 \
+    plutil -insert CFBundleShortVersionString -string 2.5.0 \
         "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
+    plutil -insert CFBundleVersion -string 5814786 \
+        "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
+    printf '{"buildId":"60152051833789151"}\n' \
+        > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
     printf 'vanilla-bytes' > "$CONTENT"
     "$BINARY" setup --game "$GAME_DIR" --assume-clean > /dev/null || fail "setup failed"
+    write_compatibility_manifest
     cat > "$GAME_DIR/launch.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 exec "$(dirname "$0")/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
 LAUNCHER
     chmod +x "$GAME_DIR/launch.sh"
 }
+
+assert_gate_refuses_before_mutation() {
+    local label="$1"
+    local marker="$GAME_DIR/launcher-ran"
+    local output code
+
+    printf 'sentinel-before-gate' > "$CONTENT"
+    cat > "$GAME_DIR/launch.sh" <<LAUNCHER
+#!/usr/bin/env bash
+touch "$marker"
+exit 0
+LAUNCHER
+    chmod +x "$GAME_DIR/launch.sh"
+
+    set +e
+    output="$("$BINARY" run --game "$GAME_DIR" -- ./launch.sh 2>&1)"
+    code=$?
+    set -e
+
+    [ "$code" -ne 0 ] || fail "$label identity was accepted"
+    [ ! -e "$marker" ] || fail "$label identity launched the child"
+    [ "$(cat "$CONTENT")" = "sentinel-before-gate" ] \
+        || fail "$label identity restored or patched archives before rejection: $output"
+}
+
+# --- Runtime identity fails before restore, patch, or launch ----------------
+if [ "$GATE_CASE" = "all" ] || [ "$GATE_CASE" = "missing" ]; then
+    make_game
+    rm "$GAME_DIR/archive-loader/compatibility/manifest.json"
+    assert_gate_refuses_before_mutation "missing manifest"
+fi
+
+if [ "$GATE_CASE" = "all" ] || [ "$GATE_CASE" = "mismatch" ]; then
+    make_game
+    printf '{"buildId":"wrong-build"}\n' \
+        > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
+    assert_gate_refuses_before_mutation "mismatched Resources build ID"
+fi
+
+if [ "$GATE_CASE" != "all" ]; then
+    echo "run lifecycle gate case $GATE_CASE passed"
+    exit 0
+fi
 
 # --- Zero mods: restores, cleans up, and launches ---------------------------
 make_game
@@ -116,14 +235,22 @@ esac
 
 # --- Without a baseline, run refuses and names setup ------------------------
 rm -rf "$GAME_DIR"
-mkdir -p "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" "$GAME_DIR/archive/Mac/content"
+mkdir -p \
+    "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" \
+    "$GAME_DIR/Cyberpunk2077.app/Contents/Resources" \
+    "$GAME_DIR/archive/Mac/content"
 cp "$WORK_DIR/fakegame" "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
 plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
-plutil -insert CFBundleShortVersionString -string 2.3.1 \
+plutil -insert CFBundleShortVersionString -string 2.5.0 \
     "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
+plutil -insert CFBundleVersion -string 5814786 \
+    "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
+printf '{"buildId":"60152051833789151"}\n' \
+    > "$GAME_DIR/Cyberpunk2077.app/Contents/Resources/goggame-1423049311.info"
 printf 'vanilla-bytes' > "$CONTENT"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$GAME_DIR/launch.sh"
 chmod +x "$GAME_DIR/launch.sh"
+write_compatibility_manifest
 
 set +e
 output="$("$BINARY" run --game "$GAME_DIR" -- ./launch.sh 2>&1)"
@@ -137,8 +264,8 @@ esac
 
 # --- A game update is refused and names --rebaseline ------------------------
 make_game
-plutil -replace CFBundleShortVersionString -string 2.4.0 \
-    "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
+plutil -replace gameVersion -string 2.4.0 \
+    "$GAME_DIR/archive-loader/pristine/baseline.json"
 set +e
 output="$("$BINARY" run --game "$GAME_DIR" -- ./launch.sh 2>&1)"
 code=$?
@@ -203,8 +330,8 @@ sleep 0.5
 # Nothing can run on SIGKILL, so the install stays as it was. Recovery is
 # restore-before-every-run, and the kernel must have dropped the lock with the
 # dead holder rather than wedging every later run.
-"$BINARY" run --game "$GAME_DIR" -- ./launch.sh > /dev/null 2>&1 \
-    || fail "a run after a SIGKILLed session failed; the lock may be wedged"
+output="$("$BINARY" run --game "$GAME_DIR" -- ./launch.sh 2>&1)" \
+    || fail "a run after a SIGKILLed session failed; the lock may be wedged: $output"
 [ "$(cat "$CONTENT")" = "vanilla-bytes" ] \
     || fail "the recovery run did not restore the install"
 

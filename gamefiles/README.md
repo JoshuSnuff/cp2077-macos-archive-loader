@@ -1,17 +1,21 @@
 # Vendored game runtime files
 
-Target game version: 2.3.1
+Target game version: 2.5.0
 
 This directory is the authoritative copy of the hand-written and locally
 configured files used by the macOS RED4ext runtime. The hook offsets and address
-database are coupled to the target game version above. Do not assume they are
-safe after a game update.
+database are coupled to the target game version and distribution above. The
+2.5.0 address audit is offline-only: all native detours remain disabled until
+the exact production runtime is traced. Do not assume these addresses are safe
+after a game update or on another distribution.
 
 ## Managed files
 
 - `red4ext/red4ext_hooks.js` — Frida hooks, including the shutdown guard.
 - `red4ext/config.ini` and `red4ext/FridaGadget.config` — local runtime config.
-- `red4ext/cyberpunk2077_addresses.json` — 126-address database for game 2.3.1.
+- Repository source `red4ext/cyberpunk2077_addresses.json` — the offline-only
+  2.5.0 address database. The sync script installs it in the game directory at
+  `red4ext/bin/x64/cyberpunk2077_addresses.json`.
 - `red4ext_entitlements.plist` and `resign_for_red4ext.sh` — the local signing
   configuration and procedure.
 
