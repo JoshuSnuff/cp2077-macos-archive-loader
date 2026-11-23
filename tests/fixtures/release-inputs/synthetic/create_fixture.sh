@@ -24,9 +24,15 @@ mkdir -p \
 
 printf '#!/usr/bin/env bash\nprintf "archive-loader %s\\n"\n' "$VERSION" \
     > "$PACKAGE_ROOT/archive-loader/bin/archive-loader"
+printf '#!/usr/bin/env bash\nprintf "setup\\n"\n' \
+    > "$PACKAGE_ROOT/archive-loader/setup.command"
+printf 'synthetic RED4ext dylib\n' > "$PACKAGE_ROOT/archive-loader/red4ext/RED4ext.dylib"
+printf 'synthetic FridaGadget dylib\n' > "$PACKAGE_ROOT/archive-loader/red4ext/FridaGadget.dylib"
 printf 'synthetic repository runtime\n' > "$PACKAGE_ROOT/archive-loader/red4ext/runtime.txt"
 printf 'synthetic absent destination\n' > "$PACKAGE_ROOT/archive-loader/red4ext/absent.txt"
-chmod +x "$PACKAGE_ROOT/archive-loader/bin/archive-loader"
+chmod +x \
+    "$PACKAGE_ROOT/archive-loader/bin/archive-loader" \
+    "$PACKAGE_ROOT/archive-loader/setup.command"
 
 printf 'synthetic game executable\n' > "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
 plutil -create xml1 "$GAME_DIR/Cyberpunk2077.app/Contents/Info.plist"
@@ -70,13 +76,35 @@ version = sys.argv[3]
 evidence_root = pathlib.Path(sys.argv[4])
 manifest_path = package_root / "archive-loader/compatibility/manifest.json"
 executable = game_root / "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
+native_paths = {
+    "archive-loader/bin/archive-loader",
+    "archive-loader/red4ext/RED4ext.dylib",
+    "archive-loader/red4ext/FridaGadget.dylib",
+}
+executable_paths = {
+    "archive-loader/bin/archive-loader",
+    "archive-loader/setup.command",
+}
+
+
+def digest_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return digest_bytes(path.read_bytes())
+
+
+def canonical(document):
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
 
 managed = [
     {"gamePath": "archive-loader/bin/archive-loader", "packagePath": "archive-loader/bin/archive-loader", "sha256": digest(package_root / "archive-loader/bin/archive-loader")},
+    {"gamePath": "archive-loader/setup.command", "packagePath": "archive-loader/setup.command", "sha256": digest(package_root / "archive-loader/setup.command")},
     {"gamePath": "archive-loader/compatibility/manifest.json", "packagePath": "archive-loader/compatibility/manifest.json", "sha256": "0" * 64},
+    {"gamePath": "red4ext/RED4ext.dylib", "packagePath": "archive-loader/red4ext/RED4ext.dylib", "sha256": digest(package_root / "archive-loader/red4ext/RED4ext.dylib")},
+    {"gamePath": "red4ext/FridaGadget.dylib", "packagePath": "archive-loader/red4ext/FridaGadget.dylib", "sha256": digest(package_root / "archive-loader/red4ext/FridaGadget.dylib")},
     {"gamePath": "red4ext/runtime.txt", "packagePath": "archive-loader/red4ext/runtime.txt", "sha256": digest(package_root / "archive-loader/red4ext/runtime.txt")},
     {"gamePath": "red4ext/absent.txt", "packagePath": "archive-loader/red4ext/absent.txt", "sha256": digest(package_root / "archive-loader/red4ext/absent.txt")},
 ]
@@ -98,43 +126,82 @@ manifest = {
         "game": "Cyberpunk 2077", "gogBuildId": "60152051833789151", "platform": "macos", "version": "2.5.0",
     },
 }
+self_entry = next(entry for entry in managed if entry["packagePath"] == "archive-loader/compatibility/manifest.json")
 masked = (json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
-self_hash = hashlib.sha256(masked).hexdigest()
-manifest["managedFiles"][1]["sha256"] = self_hash
+self_entry["sha256"] = digest_bytes(masked)
 manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
 manifest_path.write_bytes(manifest_bytes)
 
+target = manifest["target"]
+target_identity = {
+    "architecture": target["architecture"],
+    "bundleVersion": target["bundleVersion"],
+    "distribution": target["distribution"],
+    "executableSha256": target["executable"]["sha256"],
+    "executableUUID": target["executable"]["uuid"],
+    "game": target["game"],
+    "gogBuildId": target["gogBuildId"],
+    "metadataPaths": {
+        "architecture": manifest["metadataSources"]["architecture"]["path"],
+        "bundleVersion": manifest["metadataSources"]["bundleVersion"]["path"],
+        "executableSha256": manifest["metadataSources"]["executableSha256"]["path"],
+        "executableUUID": manifest["metadataSources"]["executableUuid"]["path"],
+        "gogBuildId": manifest["metadataSources"]["gogBuildId"]["path"],
+        "version": manifest["metadataSources"]["version"]["path"],
+    },
+    "platform": target["platform"],
+    "version": target["version"],
+}
+
 inputs = []
 for entry in managed:
-    source = package_root / entry["packagePath"]
+    package_path = entry["packagePath"]
+    native = package_path in native_paths
+    native_evidence = None
+    if native:
+        native_evidence = {
+            "architectures": ["arm64"],
+            "codeSigningIdentity": "SYNTHETIC-ADHOC",
+            "entitlements": {},
+            "entitlementsSha256": digest_bytes(canonical({})),
+            "flags": ["adhoc"],
+            "restrictSegment": package_path == "archive-loader/bin/archive-loader",
+            "signatureType": "adhoc",
+            "teamIdentifier": "SYNTHETIC",
+            "verification": {
+                "command": "codesign --verify --strict SYNTHETIC",
+                "output": "SYNTHETIC verification output",
+                "status": "passed",
+            },
+        }
     inputs.append({
-        "archiveListing": "SYNTHETIC fixture has no upstream archive",
-        "extractedSha256": digest(source),
+        "archiveListing": [package_path],
+        "archiveSha256": "a" * 64,
+        "extractedFilename": pathlib.Path(package_path).name,
+        "extractedSha256": digest(package_root / package_path),
         "extractionTool": {"name": "synthetic-fixture-generator", "version": "1"},
         "manifestSha256": entry["sha256"],
-        "nativeMachO": entry["packagePath"].endswith("/bin/archive-loader"),
-        "originalArchive": {"filename": "SYNTHETIC-NOT-PRODUCTION.zip", "sha256": "a" * 64},
-        "packagePath": entry["packagePath"],
-        "source": {"immutable": True, "url": "https://example.invalid/SYNTHETIC-NOT-PRODUCTION/commit/1111111111111111111111111111111111111111"},
-        "nativeEvidence": ({
-            "architectures": ["arm64"], "codeSigningIdentity": "SYNTHETIC-NOT-SIGNED",
-            "commandOutput": "SYNTHETIC otool/codesign output", "entitlementsSha256": "b" * 64,
-            "teamIdentifier": "SYNTHETIC",
-        } if entry["packagePath"].endswith("/bin/archive-loader") else None),
+        "mode": "0755" if package_path in executable_paths else "0644",
+        "nativeEvidence": native_evidence,
+        "nativeMachO": native,
+        "originalFilename": pathlib.Path(package_path).name + ".synthetic.tar.gz",
+        "packagePath": package_path,
+        "source": {
+            "immutable": True,
+            "kind": "archive",
+            "retrievedAt": "2026-11-22T00:00:00Z",
+            "url": "https://example.invalid/SYNTHETIC-NOT-PRODUCTION/commit/" + "1" * 40,
+        },
     })
 
 provenance = {
     "inputs": inputs,
     "relatedPaths": {"externalPullStaging": "SYNTHETIC-NOT-USED", "recoveryRecord": "SYNTHETIC-NOT-USED", "snapshot": "SYNTHETIC-NOT-USED"},
-    "releaseId": f"archive-loader-{version}-macos-arm64",
+    "releaseId": f"archive-loader-{version}-macos-arm64-SYNTHETIC",
     "schema": "archive-loader-release-provenance/v1",
     "synthetic": True,
-    "targetIdentityEvidence": {
-        "executableSha256": manifest["target"]["executable"]["sha256"],
-        "executableUUID": manifest["target"]["executable"]["uuid"],
-        "metadataContents": "SYNTHETIC-NOT-PRODUCTION buildId=60152051833789151",
-        "metadataPath": "Contents/Resources/goggame-1423049311.info",
-    },
+    "targetIdentity": target_identity,
 }
 (evidence_root / "provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
+(evidence_root / "target-evidence.json").write_text(json.dumps({"synthetic": True, "targetIdentity": target_identity}, indent=2, sort_keys=True) + "\n")
 PY

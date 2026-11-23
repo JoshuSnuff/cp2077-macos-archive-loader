@@ -1,0 +1,55 @@
+{
+  "inputs": [
+    {
+      "archiveListing": [
+        "archive-loader/SYNTHETIC-PAYLOAD"
+      ],
+      "archiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "extractedFilename": "SYNTHETIC-PAYLOAD",
+      "extractedSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "extractionTool": {
+        "name": "synthetic-fixture-generator",
+        "version": "1"
+      },
+      "manifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "mode": "0644",
+      "nativeEvidence": null,
+      "nativeMachO": false,
+      "originalFilename": "SYNTHETIC-PAYLOAD.tar.gz",
+      "packagePath": "archive-loader/SYNTHETIC-PAYLOAD",
+      "source": {
+        "immutable": true,
+        "kind": "archive",
+        "retrievedAt": "2026-11-22T00:00:00Z",
+        "url": "https://example.invalid/SYNTHETIC-NOT-PRODUCTION/commit/1111111111111111111111111111111111111111"
+      }
+    }
+  ],
+  "relatedPaths": {
+    "externalPullStaging": "SYNTHETIC-NOT-USED",
+    "recoveryRecord": "SYNTHETIC-NOT-USED",
+    "snapshot": "SYNTHETIC-NOT-USED"
+  },
+  "releaseId": "archive-loader-SYNTHETIC-TEMPLATE-ONLY",
+  "schema": "archive-loader-release-provenance/v1",
+  "synthetic": true,
+  "targetIdentity": {
+    "architecture": "arm64",
+    "bundleVersion": "SYNTHETIC-NOT-PRODUCTION",
+    "distribution": "gog",
+    "executableSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "executableUUID": "00000000-0000-0000-0000-000000000000",
+    "game": "Cyberpunk 2077 (SYNTHETIC)",
+    "gogBuildId": "SYNTHETIC-NOT-PRODUCTION",
+    "metadataPaths": {
+      "architecture": "SYNTHETIC-NOT-PRODUCTION",
+      "bundleVersion": "SYNTHETIC-NOT-PRODUCTION",
+      "executableSha256": "SYNTHETIC-NOT-PRODUCTION",
+      "executableUUID": "SYNTHETIC-NOT-PRODUCTION",
+      "gogBuildId": "SYNTHETIC-NOT-PRODUCTION",
+      "version": "SYNTHETIC-NOT-PRODUCTION"
+    },
+    "platform": "macos",
+    "version": "SYNTHETIC-NOT-PRODUCTION"
+  }
+}

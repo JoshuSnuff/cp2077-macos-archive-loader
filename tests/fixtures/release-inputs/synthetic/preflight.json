@@ -1,0 +1,29 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/usr/bin/true"
+      ],
+      "captureMode": "external",
+      "exitStatus": 0,
+      "id": "synthetic-assembly-preflight",
+      "result": "passed",
+      "stderrPath": "SYNTHETIC-PATH-MUST-BE-RENDERED",
+      "stdoutPath": "SYNTHETIC-PATH-MUST-BE-RENDERED"
+    }
+  ],
+  "host": {
+    "architecture": "arm64-SYNTHETIC-NOT-PRODUCTION",
+    "macosVersion": null
+  },
+  "nativeEvidence": [],
+  "nativeTools": {},
+  "packageRoot": null,
+  "schema": "archive-loader-preflight/v1",
+  "synthetic": true,
+  "toolchain": {
+    "sdkVersion": null,
+    "swiftVersion": null,
+    "xcodeVersion": null
+  }
+}

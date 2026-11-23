@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: manifest_contract.sh validate|records|file-hash MANIFEST [FILE PACKAGE_PATH GAME_PATH]" >&2
+    echo "usage: manifest_contract.sh validate|records|file-hash MANIFEST [PACKAGE_ROOT|FILE PACKAGE_PATH GAME_PATH]" >&2
     exit 2
 fi
 
@@ -203,10 +203,24 @@ def load(path):
     require(declared == calculated, f"manifest self-hash mismatch: declared {declared}, calculated {calculated}")
     return data, doc, calculated
 
+def validate_package_root(package_root, document):
+    root = pathlib.Path(package_root)
+    require(root.is_dir(), f"missing package root: {root}")
+    declared_paths = {entry["packagePath"] for entry in document["managedFiles"]}
+    for package_path in sorted(declared_paths):
+        file_path = root / package_path
+        require(file_path.is_file() and not file_path.is_symlink(), f"missing declared package file: {package_path}")
+    for file_path in root.rglob("*"):
+        if file_path.is_file() and not file_path.is_symlink():
+            package_path = file_path.relative_to(root).as_posix()
+            require(package_path in declared_paths, f"undeclared package file: {package_path}")
+
 try:
     manifest_bytes, document, self_hash = load(manifest_path)
     if command == "validate":
-        pass
+        require(len(sys.argv) in (3, 4), "validate accepts an optional package root")
+        if len(sys.argv) == 4:
+            validate_package_root(sys.argv[3], document)
     elif command == "records":
         for entry in document["managedFiles"]:
             print("\t".join((entry["packagePath"], entry["gamePath"], entry["sha256"])))

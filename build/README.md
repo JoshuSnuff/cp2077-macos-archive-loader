@@ -58,6 +58,13 @@ Only program files go into the zip. Baselines, mods, state, and logs live in the
 game directory and are created on first use, so extracting a new build over an
 existing install leaves them intact.
 
+For a production release, follow [the production workflow](../release/README-production.md).
+Assembly writes `release/evidence/readiness.json`; inspect its status and
+evidence paths before distributing the ZIP. A synthetic fixture assembly is
+useful for contract tests only and is never production compatibility evidence.
+Missing real payloads, provenance, target identity, signing/native checks,
+archive hashes, or a blocked linker keep readiness out of `ready`.
+
 ## Install what you built
 
 Extract the zip's `archive-loader` folder into your Cyberpunk 2077 directory,
