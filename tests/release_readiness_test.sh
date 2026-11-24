@@ -82,6 +82,61 @@ fixture_root="$(create_case missing-provenance)"
 rm -f "$fixture_root/evidence/provenance.json"
 assert_not_ready "missing provenance" "$fixture_root"
 
+fixture_root="$(create_case allow-unverified-missing-evidence)"
+rm -f \
+    "$fixture_root/evidence/provenance.json" \
+    "$fixture_root/evidence/target-evidence.json" \
+    "$fixture_root/evidence/preflight.json"
+assert_not_ready "allow-unverified default behavior" "$fixture_root"
+unverified_zip="$(run_assembler "$fixture_root" --allow-unverified 2>"$fixture_root/allow-unverified.stderr")" \
+    || fail "--allow-unverified did not assemble with missing release evidence"
+expected_zip="$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip"
+[ "$unverified_zip" = "$expected_zip" ] || fail "--allow-unverified returned $unverified_zip"
+[ ! -e "$fixture_root/evidence/provenance.json" ] || fail "override fabricated provenance evidence"
+[ ! -e "$fixture_root/evidence/target-evidence.json" ] || fail "override fabricated target evidence"
+[ ! -e "$fixture_root/evidence/preflight.json" ] || fail "override fabricated preflight evidence"
+grep -q '^WARNING: --allow-unverified ' "$fixture_root/allow-unverified.stderr" \
+    || fail "override did not emit a visible warning"
+jq -e --arg zip "$expected_zip" '
+    .status == "unverified"
+    and .productionCompatible == false
+    and .allowUnverified == true
+    and .finalZip.path == $zip
+    and (any(.reasons[]; contains("--allow-unverified")))
+    and (any(.reasons[]; contains("provenance is missing")))
+    and (any(.reasons[]; contains("native preflight evidence is missing")))
+' "$fixture_root/evidence/readiness.json" >/dev/null \
+    || fail "override readiness report was not explicitly unverified"
+jq -e '.identity.unverified == true and .identity.identityType == "unverified-package" and (.identity.packageTupleSha256 | test("^[0-9a-f]{64}$"))' \
+    "$fixture_root/evidence/release-output.json" >/dev/null \
+    || fail "override did not retain a labeled, package-bound identity"
+
+fixture_root="$(create_case allow-unverified-known-provenance-failure)"
+jq 'del(.inputs[0].source)' "$fixture_root/evidence/provenance.json" > "$fixture_root/evidence/provenance.tmp"
+mv "$fixture_root/evidence/provenance.tmp" "$fixture_root/evidence/provenance.json"
+if run_assembler "$fixture_root" --allow-unverified >"$fixture_root/assembler.stdout" 2>"$fixture_root/assembler.stderr"; then
+    fail "override bypassed known failed provenance"
+fi
+[ ! -e "$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip" ] \
+    || fail "known failed provenance still produced a ZIP"
+jq -e '(.status == "blocked" or .status == "unresolved") and ([.checks[] | select(.id == "provenance")][0].status == "failed") and (.finalZip == null)' \
+    "$fixture_root/evidence/readiness.json" >/dev/null \
+    || fail "known failed provenance was not retained as a fatal readiness check"
+
+fixture_root="$(create_case allow-unverified-blocked-preflight)"
+printf 'arm64e.x1\n' > "$fixture_root/preflight-success.stderr"
+jq '.commands[0].result = "blocked_toolchain_linker"' \
+    "$fixture_root/evidence/preflight.json" > "$fixture_root/evidence/preflight.tmp"
+mv "$fixture_root/evidence/preflight.tmp" "$fixture_root/evidence/preflight.json"
+if run_assembler "$fixture_root" --allow-unverified >"$fixture_root/assembler.stdout" 2>"$fixture_root/assembler.stderr"; then
+    fail "override bypassed blocked native preflight"
+fi
+[ ! -e "$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip" ] \
+    || fail "blocked native preflight still produced a ZIP"
+jq -e '(.status == "blocked") and ([.checks[] | select(.id == "native-preflight")][0].status == "blocked") and (.finalZip == null)' \
+    "$fixture_root/evidence/readiness.json" >/dev/null \
+    || fail "blocked native preflight was not retained as a fatal readiness check"
+
 fixture_root="$(create_case target-mismatch)"
 jq '.targetIdentity.version = "9.9.9"' \
     "$fixture_root/evidence/target-evidence.json" > "$fixture_root/evidence/target-evidence.tmp"
@@ -139,6 +194,34 @@ jq -e '
         and .maskedSha256 == .expectedSha256)
 ' "$fixture_root/evidence/readiness.json" >/dev/null \
     || fail "manifest self-entry did not report ordinary, masked, and declared hashes separately"
+
+fixture_root="$(create_case allow-unverified-complete-evidence)"
+produced_zip="$(run_assembler "$fixture_root" --allow-unverified)" \
+    || fail "--allow-unverified rejected a complete test fixture"
+expected_zip="$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip"
+[ "$produced_zip" = "$expected_zip" ] || fail "complete override returned $produced_zip"
+jq -e '
+    .status == "unverified"
+    and .productionCompatible == false
+    and .allowUnverified == true
+    and (any(.commands[]; .id == "assembly" and (.argv | index("--allow-unverified"))))
+' "$fixture_root/evidence/readiness.json" >/dev/null \
+    || fail "complete override was incorrectly reported as production-ready"
+
+fixture_root="$(create_case allow-unverified-stale-reuse)"
+run_assembler "$fixture_root" --allow-unverified >/dev/null \
+    || fail "could not create stale unverified fixture"
+output_identity="$fixture_root/evidence/release-output.json"
+jq -e '.identity.unverified == true and .identity.identityType == "unverified-package" and (.identity.packageTupleSha256 | test("^[0-9a-f]{64}$"))' \
+    "$output_identity" >/dev/null \
+    || fail "unverified output was not labeled and package-bound"
+stale_unverified_hash="$(shasum -a 256 "$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip" | awk '{print $1}')"
+printf 'changed after unverified assembly\n' > "$fixture_root/package/archive-loader/red4ext/runtime.txt"
+if run_assembler "$fixture_root" --allow-unverified >"$fixture_root/assembler.stdout" 2>"$fixture_root/assembler.stderr"; then
+    fail "override reused a stale unverified ZIP after package mutation"
+fi
+[ "$(shasum -a 256 "$fixture_root/build/archive-loader-$VERSION-macos-arm64.zip" | awk '{print $1}')" = "$stale_unverified_hash" ] \
+    || fail "stale unverified package mutation changed the existing ZIP"
 
 fixture_root="$(create_case package-hash-mode-mismatch)"
 printf 'tampered synthetic runtime\n' > "$fixture_root/package/archive-loader/red4ext/runtime.txt"

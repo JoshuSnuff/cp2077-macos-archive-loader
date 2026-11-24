@@ -65,6 +65,23 @@ checks; after successful assembly the report also contains the final ZIP path,
 SHA-256, and exact file listing. `release-output.json` remains the separate
 pre-assembly identity/output record and is not hashed into readiness.
 
+Do not use `--allow-unverified` in this workflow. That explicit test-only
+override is available only to assemble a tested package while production
+provenance, target, or native-preflight evidence is still missing or invalid:
+
+```bash
+./release/assemble.sh --version VERSION --allow-unverified
+```
+
+It keeps manifest, package, loader-version, and `__RESTRICT` checks strict and
+never fabricates the missing evidence. It emits a warning and writes a report
+with `status: "unverified"`, `allowUnverified: true`,
+`productionCompatible: false`, and reasons for every missing or failed check.
+If the pre-assembly identity is unavailable, its `release-output.json` value is
+a labeled identity bound to the current manifest and package tuple, without
+inventing production evidence. Do not distribute that ZIP or treat its report
+as production readiness; rerun the normal command after all real evidence is collected.
+
 The report is `ready` only when real production inputs and all required native
 checks pass. Missing payload, provenance, target, signing evidence, archive
 hashes, or final ZIP evidence is `unresolved` or `blocked`, never `ready`.

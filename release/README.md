@@ -127,6 +127,30 @@ preflight hash, manifest schema, and loader version. An existing ZIP is reused
 only when both it and `release-output.json` exactly match that identity, hash,
 and listing. A filename match alone is never considered current.
 
+### Explicit unverified override
+
+The normal command remains strict: missing or invalid provenance, target, native
+preflight, or pre-assembly identity evidence stops assembly and produces no
+ZIP. For a tested package that must be exercised before production evidence is
+available, an operator may explicitly opt in:
+
+    ./release/assemble.sh --version VERSION --allow-unverified
+
+This override still requires the manifest, staged-package hash/mode checks,
+loader version, and loader `__RESTRICT` checks to pass. It only relaxes the
+release-evidence gate. It does not create, alter, or infer provenance,
+target-identity, or native-preflight evidence. If the pre-assembly identity
+cannot be calculated, `release-output.json` records a labeled
+`unverified-package` identity bound to the current manifest and package tuple;
+it does not add provenance, target, or native-preflight fields.
+
+The command emits a visible stderr warning. Its readiness report is always
+machine-readable as `status: "unverified"`, `allowUnverified: true`, and
+`productionCompatible: false`; `reasons` retains the missing or failed checks
+and the explicit override reason. An unverified ZIP is for testing only and
+must not be distributed. Without `--allow-unverified`, the existing blocked or
+unresolved behavior is unchanged.
+
 The default remains no-overwrite: stale, malformed, or one-sided output stops
 assembly without changing it. An operator may explicitly request recoverable
 replacement:
@@ -183,14 +207,14 @@ The production sequence is:
 
 `assemble.sh` writes `$ARCHIVE_LOADER_RELEASE_EVIDENCE_DIR/readiness.json`
 separately from the pre-assembly `release-output.json` identity. The readiness report records
-`ready`, `blocked`, or `unresolved`, its evidence paths, exact command argv,
+`ready`, `unverified`, `blocked`, or `unresolved`, its evidence paths, exact command argv,
 quarantine action, and final ZIP hash/listing when assembly completed. The
 preflight JSON used in the input identity is never folded into the readiness
 report hash, so the report cannot create a circular identity.
 
 Missing payloads, provenance, target identity, signing evidence, archive hashes,
-or native evidence produce `blocked` or `unresolved`; they can never produce
-`ready`. A `blocked_toolchain_linker` result, including an `arm64e.x1`
+or native evidence produce `blocked` or `unresolved` by default; the explicit
+override produces `unverified`, never `ready`. A `blocked_toolchain_linker` result, including an `arm64e.x1`
 diagnostic, remains blocked. Synthetic fixtures require
 `ARCHIVE_LOADER_ALLOW_SYNTHETIC=1`, stay under
 `tests/fixtures/release-inputs/synthetic/`, and are explicitly blocked from

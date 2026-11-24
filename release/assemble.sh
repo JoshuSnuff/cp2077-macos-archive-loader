@@ -7,10 +7,11 @@ SCRIPT_REPOSITORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPOSITORY_DIR="${ARCHIVE_LOADER_REPOSITORY_DIR:-$SCRIPT_REPOSITORY_DIR}"
 VERSION=""
 REPLACE_EXISTING=0
+ALLOW_UNVERIFIED=0
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") --version VERSION [--replace-existing]
+Usage: $(basename "$0") --version VERSION [--replace-existing] [--allow-unverified]
 
 Assemble build/archive-loader-VERSION-macos-arm64.zip with the archive-loader
 runtime payload.
@@ -18,6 +19,10 @@ runtime payload.
 By default, an existing current ZIP/evidence pair is reused and any stale or
 incomplete output is refused. --replace-existing moves stale output into a
 timestamped build quarantine before assembling a replacement.
+
+--allow-unverified permits a test-only ZIP when release provenance, target, or
+native preflight evidence is missing or invalid. It never produces a
+production-compatible readiness report and never fabricates missing evidence.
 EOF
 }
 
@@ -33,6 +38,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --replace-existing)
             REPLACE_EXISTING=1
+            shift
+            ;;
+        --allow-unverified)
+            ALLOW_UNVERIFIED=1
             shift
             ;;
         --help|-h)
@@ -101,10 +110,23 @@ TARGET_STATUS="unresolved"
 PREFLIGHT_STATUS="unresolved"
 IDENTITY_STATUS="unresolved"
 BINARY_STATUS="unresolved"
-IDENTITY_JSON=""
+IDENTITY_JSON="null"
 
 add_readiness_reason() {
     printf '%s\n' "$1" >> "$READINESS_REASONS_FILE"
+}
+
+if [ "$ALLOW_UNVERIFIED" -eq 1 ]; then
+    add_readiness_reason "--allow-unverified was used; this ZIP is not production-compatible"
+    echo "WARNING: --allow-unverified is active; assembling a test-only, unverified ZIP. No production provenance, target, or preflight evidence will be fabricated." >&2
+fi
+
+readiness_success_status() {
+    if [ "$ALLOW_UNVERIFIED" -eq 1 ]; then
+        printf 'unverified\n'
+    else
+        printf 'ready\n'
+    fi
 }
 
 run_captured() {
@@ -133,7 +155,8 @@ write_readiness_report() {
         READINESS_CHECKS="$MANIFEST_STATUS,$PACKAGE_STATUS,$PROVENANCE_STATUS,$TARGET_STATUS,$PREFLIGHT_STATUS,$IDENTITY_STATUS,$BINARY_STATUS,$QUARANTINE_STATUS,$ASSEMBLY_STATUS,$ZIP_STATUS" \
         READINESS_ASSEMBLY_COMPLETE="$ASSEMBLY_COMPLETE" READINESS_QUARANTINE="$QUARANTINE_DIR" \
         READINESS_QUARANTINE_RECOVERY="$QUARANTINE_RECOVERY_STATUS" \
-        READINESS_ALLOW_SYNTHETIC="$ARCHIVE_LOADER_ALLOW_SYNTHETIC" READINESS_REPLACE_EXISTING="$REPLACE_EXISTING" \
+        READINESS_ALLOW_SYNTHETIC="$ARCHIVE_LOADER_ALLOW_SYNTHETIC" READINESS_ALLOW_UNVERIFIED="$ALLOW_UNVERIFIED" \
+        READINESS_REPLACE_EXISTING="$REPLACE_EXISTING" \
         python3 <<'PY'
 import hashlib
 import json
@@ -164,6 +187,9 @@ manifest = load(manifest_path)
 provenance = load(provenance_path)
 preflight = load(preflight_path)
 status = os.environ["READINESS_STATUS"]
+allow_unverified = os.environ["READINESS_ALLOW_UNVERIFIED"] == "1"
+if allow_unverified and status == "ready":
+    status = "unverified"
 if status == "ready" and (os.environ["READINESS_ALLOW_SYNTHETIC"] == "1" or any(
     isinstance(item, dict) and item.get("synthetic") is True for item in (provenance, preflight)
 )):
@@ -197,8 +223,10 @@ if isinstance(preflight, dict):
 assembly_argv = [os.environ["READINESS_ASSEMBLER"], "--version", os.environ["READINESS_VERSION"]]
 if os.environ["READINESS_REPLACE_EXISTING"] == "1":
     assembly_argv.append("--replace-existing")
+if allow_unverified:
+    assembly_argv.append("--allow-unverified")
 commands.append({"id": "assembly", "argv": assembly_argv, "result": statuses[8]})
-for name in ("manifest-validation", "package-validation", "provenance-validation", "preflight-validation", "identity", "loader-version", "loader-restrict"):
+for name in ("manifest-validation", "package-validation", "provenance-validation", "preflight-validation", "identity", "unverified-identity", "loader-version", "loader-restrict"):
     evidence_paths.extend(str(pathlib.Path(diagnostics) / f"{name}.{suffix}") for suffix in ("stdout", "stderr"))
 
 package_files = []
@@ -292,6 +320,7 @@ report = {
     "commands": commands,
     "evidencePaths": evidence_paths,
     "finalZip": final_zip,
+    "allowUnverified": allow_unverified,
     "packageFiles": package_files,
     "productionCompatible": status == "ready",
     "quarantine": quarantine,
@@ -416,10 +445,13 @@ else
     add_readiness_reason "native preflight validation failed; see $PREFLIGHT_STDERR"
 fi
 
-if [ -f "$PROVENANCE" ] && [ -f "$MANIFEST" ] && [ -d "$PACKAGE_ROOT" ] && [ -f "$PREFLIGHT" ] && run_captured "$IDENTITY_STDOUT" "$IDENTITY_STDERR" "$PROVENANCE_CONTRACT" identity "$PROVENANCE" "$MANIFEST" "$PACKAGE_ROOT" "$PREFLIGHT"; then
+if [ ! -f "$PROVENANCE" ] || [ ! -f "$MANIFEST" ] || [ ! -d "$PACKAGE_ROOT" ] || [ ! -f "$PREFLIGHT" ]; then
+    add_readiness_reason "pre-assembly identity was not calculated because required inputs are missing"
+elif run_captured "$IDENTITY_STDOUT" "$IDENTITY_STDERR" "$PROVENANCE_CONTRACT" identity "$PROVENANCE" "$MANIFEST" "$PACKAGE_ROOT" "$PREFLIGHT"; then
     IDENTITY_STATUS="passed"
     IDENTITY_JSON="$(cat "$IDENTITY_STDOUT")"
 else
+    IDENTITY_STATUS="failed"
     add_readiness_reason "pre-assembly identity was not calculated or failed; see $IDENTITY_STDERR"
 fi
 
@@ -444,17 +476,98 @@ else
     fi
 fi
 
-PRECHECK_FAILURE=0
-for check_status in "$MANIFEST_STATUS" "$PACKAGE_STATUS" "$PROVENANCE_STATUS" "$TARGET_STATUS" "$PREFLIGHT_STATUS" "$IDENTITY_STATUS" "$BINARY_STATUS"; do
-    [ "$check_status" = "passed" ] || PRECHECK_FAILURE=1
+UNVERIFIED_IDENTITY_STDOUT="$READINESS_DIAGNOSTICS_DIR/unverified-identity.stdout"
+UNVERIFIED_IDENTITY_STDERR="$READINESS_DIAGNOSTICS_DIR/unverified-identity.stderr"
+if [ "$ALLOW_UNVERIFIED" -eq 1 ] && [ "$MANIFEST_STATUS" = "passed" ] && [ "$PACKAGE_STATUS" = "passed" ]; then
+    if run_captured "$UNVERIFIED_IDENTITY_STDOUT" "$UNVERIFIED_IDENTITY_STDERR" python3 - "$MANIFEST" "$PACKAGE_ROOT" "$MANIFEST_CONTRACT" <<'PY'
+import hashlib
+import json
+import pathlib
+import stat
+import subprocess
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+package_root = pathlib.Path(sys.argv[2])
+manifest_contract = sys.argv[3]
+manifest_bytes = manifest_path.read_bytes()
+manifest = json.loads(manifest_bytes.decode("utf-8"))
+self_entry = next(entry for entry in manifest["managedFiles"] if entry["packagePath"] == entry["gamePath"] == "archive-loader/compatibility/manifest.json")
+masked_hash = subprocess.check_output(
+    ["bash", manifest_contract, "file-hash", str(manifest_path), str(manifest_path), self_entry["packagePath"], self_entry["gamePath"]],
+    text=True,
+).strip()
+
+tuples = []
+for entry in manifest["managedFiles"]:
+    package_path = entry["packagePath"]
+    file_path = package_root / package_path
+    if not file_path.is_file() or file_path.is_symlink():
+        raise SystemExit(f"missing package file: {package_path}")
+    expected_mode = "0755" if package_path in {"archive-loader/bin/archive-loader", "archive-loader/setup.command"} else "0644"
+    actual_mode = format(stat.S_IMODE(file_path.stat().st_mode), "04o")
+    if actual_mode != expected_mode:
+        raise SystemExit(f"package mode mismatch: {package_path}")
+    actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if package_path == self_entry["packagePath"]:
+        tuple_hash = masked_hash
+        if entry["sha256"] != masked_hash:
+            raise SystemExit("manifest self-hash mismatch")
+    else:
+        tuple_hash = actual_hash
+        if actual_hash != entry["sha256"]:
+            raise SystemExit(f"package hash mismatch: {package_path}")
+    tuples.append([package_path, tuple_hash, expected_mode])
+
+canonical = json.dumps(sorted(tuples), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+identity = {
+    "identityType": "unverified-package",
+    "loaderVersion": manifest["loaderVersion"],
+    "manifestSchema": manifest["schema"],
+    "manifestSelfSha256": masked_hash,
+    "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+    "packageTupleSha256": hashlib.sha256(canonical).hexdigest(),
+    "unverified": True,
+}
+print(json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+PY
+    then
+        IDENTITY_JSON="$(cat "$UNVERIFIED_IDENTITY_STDOUT")"
+    else
+        PACKAGE_STATUS="failed"
+        add_readiness_reason "unverified package identity could not be calculated; see $UNVERIFIED_IDENTITY_STDERR"
+    fi
+fi
+
+CORE_PRECHECK_FAILURE=0
+for check_status in "$MANIFEST_STATUS" "$PACKAGE_STATUS" "$BINARY_STATUS"; do
+    [ "$check_status" = "passed" ] || CORE_PRECHECK_FAILURE=1
 done
-if [ "$PRECHECK_FAILURE" -ne 0 ]; then
+KNOWN_EVIDENCE_FAILURE=0
+MISSING_EVIDENCE=0
+for check_status in "$PROVENANCE_STATUS" "$TARGET_STATUS" "$PREFLIGHT_STATUS" "$IDENTITY_STATUS"; do
+    case "$check_status" in
+        passed)
+            ;;
+        unresolved)
+            MISSING_EVIDENCE=1
+            ;;
+        failed|blocked|*)
+            KNOWN_EVIDENCE_FAILURE=1
+            ;;
+    esac
+done
+if [ "$CORE_PRECHECK_FAILURE" -ne 0 ] || [ "$KNOWN_EVIDENCE_FAILURE" -ne 0 ] || { [ "$MISSING_EVIDENCE" -ne 0 ] && [ "$ALLOW_UNVERIFIED" -ne 1 ]; }; then
     if [ "$PREFLIGHT_BLOCKED" -eq 1 ]; then
         write_readiness_report "blocked" || true
     else
         write_readiness_report "unresolved" || true
     fi
     exit 1
+fi
+
+if [ "$ALLOW_UNVERIFIED" -eq 1 ] && [ "$MISSING_EVIDENCE" -ne 0 ]; then
+    add_readiness_reason "release evidence checks did not all pass; --allow-unverified permitted test-only assembly"
 fi
 
 if [ ! -x "$BINARY" ]; then
@@ -531,7 +644,7 @@ if [ "$CURRENT_PAIR" -eq 1 ]; then
     ASSEMBLY_STATUS="reused"
     ZIP_STATUS="passed"
     ASSEMBLY_COMPLETE=1
-    write_readiness_report "ready"
+    write_readiness_report "$(readiness_success_status)"
     echo "$OUTPUT_ZIP"
     exit 0
 fi
@@ -712,6 +825,6 @@ fi
 ASSEMBLY_STATUS="assembled"
 ZIP_STATUS="passed"
 ASSEMBLY_COMPLETE=1
-write_readiness_report "ready"
+write_readiness_report "$(readiness_success_status)"
 
 echo "$OUTPUT_ZIP"
