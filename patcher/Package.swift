@@ -12,9 +12,13 @@ let package = Package(
         .executable(name: "archive-loader", targets: ["archive-loader"]),
         .library(name: "CP2077ArchiveCore", targets: ["CP2077ArchiveCore"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/jpsim/Yams.git", exact: "5.1.3"),
+    ],
     targets: [
         .target(
-            name: "CP2077ArchiveCore"
+            name: "CP2077ArchiveCore",
+            dependencies: [.product(name: "Yams", package: "Yams")]
         ),
         .executableTarget(
             name: "archive-loader",

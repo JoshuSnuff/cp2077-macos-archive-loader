@@ -58,6 +58,8 @@ struct ArchiveLoaderCLI {
             try StatusCommand.run(args)
         case "cache":
             try cache(args)
+        case "tweaks":
+            try tweaks(args)
         case "version", "--version", "-v":
             print("archive-loader \(LoaderVersion.current)")
         case "help", "--help", "-h":
@@ -222,7 +224,65 @@ struct ArchiveLoaderCLI {
         }
         let game = GameInstall(root: candidate.root)
         try PatchCacheStore(game: game).clear()
+        try TweakCacheStore(game: game).clear()
         print("cleared \(game.cacheDirectory.path)")
+    }
+
+    static func tweaks(_ args: [String]) throws {
+        guard args.first == "build" else {
+            throw CLIError.usage("usage: archive-loader tweaks build --game GAME_DIR [--no-cache]")
+        }
+
+        var explicitGame: String?
+        var useCache = true
+        var index = 1
+        while index < args.count {
+            switch args[index] {
+            case "--game":
+                guard index + 1 < args.count else { throw CLIError.missingValue("--game") }
+                let value = args[index + 1]
+                guard !value.hasPrefix("--") else { throw CLIError.missingValue("--game") }
+                guard explicitGame == nil else {
+                    throw CLIError.usage("tweaks build accepts only one --game value")
+                }
+                explicitGame = value
+                index += 2
+            case "--no-cache":
+                useCache = false
+                index += 1
+            default:
+                throw CLIError.usage("unknown tweaks option: \(args[index])")
+            }
+        }
+
+        let candidates = try GameDiscovery.resolve(
+            explicitRoot: explicitGame.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        )
+        guard let candidate = candidates.first, candidates.count == 1 else {
+            throw CLIError.usage("could not resolve a single game installation; pass --game")
+        }
+        let game = GameInstall(root: candidate.root)
+        guard let result = try RunCommand.buildTweaks(game: game, useCache: useCache) else {
+            print("no tweak mods in \(game.tweakModsDirectory.path)")
+            return
+        }
+        defer { result.removeTemporaryBuild() }
+
+        print("fingerprint \(result.fingerprint.value)")
+        print("mods        \(result.plan.mods.count)")
+        print("operations  \(result.applied)\(result.cacheHit ? " (cache hit)" : "")")
+        for blob in result.blobs {
+            print("built       \(blob.path)")
+        }
+        for loser in result.plan.losers {
+            print(
+                "conflict    \(loser.flat): \(loser.mod.lastPathComponent)"
+                    + " loses to \(loser.winner.lastPathComponent)"
+            )
+        }
+        for note in result.plan.unsupported {
+            print("unsupported \(note)")
+        }
     }
 
     /// Both patch commands rewrite official archives in place.
@@ -351,8 +411,8 @@ struct ArchiveLoaderCLI {
         archive-loader
 
         Commands:
-          setup [--debug] [--game GAME_DIR] [--rebaseline] [--assume-clean]
-          run [--debug] [--vanilla-on-error] [--no-cache] [--game GAME_DIR] -- <launcher> [args...]
+          setup [--debug] [--game GAME_DIR] [--rebaseline] [--assume-clean] [--trust-live-tweaks]
+          run [--debug] [--vanilla-on-error] [--no-cache] [--no-tweaks] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
           verify --game GAME_DIR [--mods MOD.archive [...]]
@@ -360,6 +420,7 @@ struct ArchiveLoaderCLI {
           restore [--debug] [--game GAME_DIR]
           status [--game GAME_DIR] [--deep]
           cache clear [--game GAME_DIR]
+          tweaks build --game GAME_DIR [--no-cache]
           --version
 
         Scope:

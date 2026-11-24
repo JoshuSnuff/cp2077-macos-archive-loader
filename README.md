@@ -10,6 +10,7 @@ after a session.
 - Version 0.1.3
 - Apple Silicon Macs only
 - PC `.archive` mods only
+- Offline TweakDB edits for existing flats and arrays; ArchiveXL-dependent mods are rejected
 
 ## Install
 
@@ -42,6 +43,19 @@ Remove a file to disable that mod. Mods are applied in alphabetical order, and
 when two mods change the same thing the first one wins — the other is reported
 at launch, not silently applied.
 
+TweakDB mods (`.yaml`, `.yml`, or `.tweak`) go under
+`archive-loader/mods/tweaks/`. The supported subset assigns existing flats and
+appends/removes array values. Use `base` or `ep1` selectors when an operation
+must target one blob, or build and verify offline:
+
+```bash
+./archive-loader/bin/archive-loader tweaks build --game "/path/to/Cyberpunk 2077"
+```
+
+ArchiveXL resource registration and runtime APIs are not supported. Exact
+ArchiveXL dependency markers fail before any game data is written; remove that
+mod or use a future ArchiveXL-capable runtime.
+
 ## Launch
 
 Start the game through `archive-loader` instead of directly:
@@ -73,6 +87,8 @@ To keep using the Play button in your storefront, add the wrapper there:
 
 Without a wrapper, the Play button launches unmodded: archives are only patched
 for the duration of a run.
+
+Use `run --no-tweaks` for archive-only launches.
 
 ## If something goes wrong
 

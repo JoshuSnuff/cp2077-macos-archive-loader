@@ -37,6 +37,37 @@ public struct GameInstall: Sendable {
         loaderDirectory.appending(path: "cache", directoryHint: .isDirectory)
     }
 
+    /// The game's startup TweakDB directory.
+    public var tweakCacheDirectory: URL {
+        root.appending(path: "r6/cache", directoryHint: .isDirectory)
+    }
+
+    /// Complete databases that may be present in an installation. Phantom
+    /// Liberty's database is optional; callers use `tweakBlobs()` to select
+    /// only files actually installed.
+    public var tweakBlobNames: [String] {
+        ["tweakdb.bin", "tweakdb_ep1.bin"]
+    }
+
+    public func tweakBlobs() -> [URL] {
+        tweakBlobNames
+            .map { tweakCacheDirectory.appending(path: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .sorted { left, right in
+                Array(left.path.utf8).lexicographicallyPrecedes(Array(right.path.utf8))
+            }
+    }
+
+    /// Where supported TweakXL-style documents are discovered.
+    public var tweakModsDirectory: URL {
+        loaderDirectory.appending(path: "mods/tweaks", directoryHint: .isDirectory)
+    }
+
+    /// Offline tweak builds, one generation per fingerprint.
+    public var tweakCacheRoot: URL {
+        cacheDirectory.appending(path: "tweaks", directoryHint: .isDirectory)
+    }
+
     /// Symlink to the published generation. Switching it is the single commit
     /// point of a capture, which is why it is a link and not a copy.
     ///

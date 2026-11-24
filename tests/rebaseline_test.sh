@@ -55,7 +55,32 @@ printf 'patched-rubbish' > "$CONTENT"
 grep -q '"gameVersion" : "2.3.1"' "$GAME_DIR/archive-loader/pristine/baseline.json" \
     || fail "the recaptured manifest has the wrong version"
 
-# --- 2. Changed version: never restores -------------------------------------
+# --- 2. Legacy archive-only baseline: trust is explicit ---------------------
+make_game
+mkdir -p "$GAME_DIR/r6/cache"
+printf 'live-tweakdb-bytes' > "$GAME_DIR/r6/cache/tweakdb.bin"
+printf 'patched-rubbish' > "$CONTENT"
+
+if output="$("$BINARY" setup --game "$GAME_DIR" --rebaseline --assume-clean 2>&1)"; then
+    fail "legacy archive-only rebaseline accepted live TweakDB without the trust flag"
+fi
+case "$output" in
+    *TweakDB*) ;;
+    *) fail "the default refusal did not name TweakDB: $output" ;;
+esac
+[ "$(cat "$CONTENT")" = "patched-rubbish" ] \
+    || fail "the default refusal changed the live archive"
+
+"$BINARY" setup --game "$GAME_DIR" --rebaseline --trust-live-tweaks --assume-clean > /dev/null \
+    || fail "trusted legacy archive-only rebaseline failed"
+
+[ "$(cat "$CONTENT")" = "original-2.3.1-bytes" ] \
+    || fail "trusted rebaseline did not restore archives before recapturing"
+grep -Fq '"path" : "r6\/cache\/tweakdb.bin"' \
+    "$GAME_DIR/archive-loader/pristine/baseline.json" \
+    || fail "trusted rebaseline did not publish the live TweakDB entry"
+
+# --- 3. Changed version: never restores -------------------------------------
 make_game
 # The storefront updated the game: new bytes, new version.
 printf 'new-2.4.0-bytes' > "$CONTENT"
@@ -69,7 +94,7 @@ set_version 2.4.0
 grep -q '"gameVersion" : "2.4.0"' "$GAME_DIR/archive-loader/pristine/baseline.json" \
     || fail "the recaptured manifest did not record the new version"
 
-# --- 3. Dirty AND changed version: refuse, name verify/repair ---------------
+# --- 4. Dirty AND changed version: refuse, name verify/repair ---------------
 make_game
 printf 'new-2.4.0-bytes' > "$CONTENT"
 set_version 2.4.0
@@ -85,7 +110,7 @@ esac
 [ "$(cat "$CONTENT")" = "new-2.4.0-bytes" ] \
     || fail "the refused rebaseline still wrote to the install"
 
-# --- 4. Rebaseline without an existing baseline behaves like a first capture -
+# --- 5. Rebaseline without an existing baseline behaves like a first capture -
 rm -rf "$GAME_DIR"
 mkdir -p "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS" "$GAME_DIR/archive/Mac/content"
 touch "$GAME_DIR/Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"

@@ -23,6 +23,21 @@ import Testing
     }
 }
 
+@Test func adHocResigningDoesNotInvalidateTheRuntimeIdentity() {
+    let manifest = syntheticManifest(managedFiles: [])
+    let target = manifest.target
+    let actual = CompatibilityIdentity(
+        architecture: target.architecture,
+        version: target.version,
+        bundleVersion: target.bundleVersion,
+        gogBuildId: target.gogBuildId,
+        executableUUID: target.executable.uuid,
+        executableSHA256: String(repeating: "b", count: 64)
+    )
+
+    #expect(CompatibilityIdentityValidator.mismatches(target: target, actual: actual).isEmpty)
+}
+
 @Test func codecPreservesTheExactShippedBytesWhenVerifyingTheSelfHash() throws {
     let manifest = syntheticManifest(
         managedFiles: [

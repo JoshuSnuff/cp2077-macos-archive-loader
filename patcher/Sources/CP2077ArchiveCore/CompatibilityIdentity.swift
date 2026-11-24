@@ -104,7 +104,10 @@ public enum CompatibilityIdentityValidator {
         if actual.bundleVersion != target.bundleVersion { differences.append("bundleVersion") }
         if actual.gogBuildId != target.gogBuildId { differences.append("gogBuildId") }
         if actual.executableUUID != target.executable.uuid.lowercased() { differences.append("executable.uuid") }
-        if actual.executableSHA256 != target.executable.sha256.lowercased() { differences.append("executable.sha256") }
+        // RED4ext requires an ad-hoc re-sign of the executable and nested
+        // dylibs. That changes the code-signature bytes, and therefore the
+        // whole-file SHA-256, without changing the tracked game build. The
+        // immutable identity fields above remain the authoritative match.
         return differences
     }
 

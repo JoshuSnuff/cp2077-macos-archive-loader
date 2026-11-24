@@ -20,7 +20,18 @@ enum StatusCommand {
         let storefront = candidate.sources.joined(separator: "+")
         print("Game        \(game.root.path)   (\(storefront), \(candidate.version))")
 
+        let tweakMods = try TweakModCollection.mods(game: game)
+        print("tweak mods  \(tweakMods.count) in \(game.tweakModsDirectory.path)")
+        let archiveXL = try ArchiveXLDetector.scan(mods: tweakMods, game: game)
+        for diagnostic in archiveXL.diagnostics {
+            print("ArchiveXL   \(diagnostic)")
+        }
+        var tweakProblem = !archiveXL.isEmpty
+
         guard let manifest = try store.publishedManifest() else {
+            if !tweakMods.isEmpty {
+                print("tweak baseline  not captured (run: archive-loader setup --rebaseline)")
+            }
             print("Baseline    none — run: archive-loader setup")
             throw CLIError.usage("no baseline captured")
         }
@@ -37,7 +48,49 @@ enum StatusCommand {
             return true
         }
 
-        if comparison.isPristine && artifacts.isEmpty {
+        if manifest.tweaks.isEmpty {
+            print("tweak baseline  not captured (run: archive-loader setup --rebaseline)")
+            if !tweakMods.isEmpty {
+                tweakProblem = true
+                print("tweak state     unavailable — tweak mods need a TweakDB baseline")
+            }
+        } else {
+            print("tweak baseline  \(manifest.tweaks.count) blob(s) in generation \(manifest.id)")
+            let tweakComparison = try store.compareLiveTweaks(deep: deep)
+            print("tweak state     "
+                + (tweakComparison.isPristine ? "matches baseline" : "patched or drifted"))
+            for path in tweakComparison.drifted {
+                tweakProblem = true
+                print("  tweak differs \(path)")
+            }
+            for path in tweakComparison.missing {
+                tweakProblem = true
+                print("  tweak missing  \(path)")
+            }
+
+            if !tweakMods.isEmpty {
+                let fingerprint = try TweakFingerprint.compute(
+                    game: game,
+                    manifest: manifest,
+                    mods: tweakMods,
+                    inventory: archiveXL
+                )
+                do {
+                    let cached = try TweakCacheStore(game: game).load(fingerprint) != nil
+                    print("tweak build     \(fingerprint.value)\(cached ? " (cached)" : " (not built)")")
+                } catch {
+                    tweakProblem = true
+                    print("tweak build     cache fallback required — \(error)")
+                }
+            }
+        }
+
+        if TweakWriteMarker.exists(game: game) {
+            tweakProblem = true
+            print("tweak marker    pending verified restoration at \(TweakWriteMarker.url(game: game).path)")
+        }
+
+        if comparison.isPristine && artifacts.isEmpty && !tweakProblem {
             print("Live        pristine — no loader artifacts present"
                 + (deep ? "" : "  (sizes only; use --deep to re-hash)"))
         } else {
@@ -75,7 +128,7 @@ enum StatusCommand {
             print("Game        RUNNING — archives are patched for this session")
         }
 
-        guard comparison.isPristine && artifacts.isEmpty else {
+        guard comparison.isPristine && artifacts.isEmpty && !tweakProblem else {
             throw CLIError.usage("this installation is not pristine; run: archive-loader restore")
         }
     }

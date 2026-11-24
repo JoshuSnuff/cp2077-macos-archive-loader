@@ -26,6 +26,11 @@ public struct CacheFingerprint: Sendable, Equatable {
     /// be diffed against the previous session rather than guessed at.
     public let canonicalInput: String
 
+    public init(value: String, canonicalInput: String) {
+        self.value = value
+        self.canonicalInput = canonicalInput
+    }
+
     public static func compute(
         game: GameInstall,
         manifest: BaselineManifest,

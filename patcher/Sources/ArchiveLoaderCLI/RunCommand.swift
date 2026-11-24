@@ -7,11 +7,99 @@ import Foundation
 /// install is still patched" can never be read as the game's own exit status.
 private let restoreFailureExitCode: Int32 = 70
 
+struct TweakBuildResult {
+    let blobs: [URL]
+    let plan: TweakPlan
+    let fingerprint: CacheFingerprint
+    let cacheHit: Bool
+    let applied: Int
+    let temporaryDirectory: URL?
+
+    func removeTemporaryBuild() {
+        guard let temporaryDirectory else { return }
+        try? FileManager.default.removeItem(at: temporaryDirectory)
+    }
+}
+
+enum TweakBuildError: Error, CustomStringConvertible {
+    case noTweakMods
+    case noTweakBaseline
+    case missingBaselineBlob(String)
+    case archiveXL([String])
+    case invalidOperation(String)
+    case verificationFailed([String])
+
+    var description: String {
+        switch self {
+        case .noTweakMods:
+            return "no tweak mods were found"
+        case .noTweakBaseline:
+            return "the published baseline is archive-only and has no TweakDB blobs."
+                + " Run: archive-loader setup --rebaseline"
+        case let .missingBaselineBlob(path):
+            return "the published baseline is missing TweakDB blob \(path)"
+        case let .archiveXL(diagnostics):
+            return "ArchiveXL is unsupported by this loader:\n"
+                + diagnostics.map { "  \($0)" }.joined(separator: "\n")
+        case let .invalidOperation(detail):
+            return "tweak build failed: \(detail)"
+        case let .verificationFailed(issues):
+            return "TweakDB verification failed:\n"
+                + issues.map { "  \($0)" }.joined(separator: "\n")
+        }
+    }
+}
+
+enum TweakWriteMarker {
+    private struct Document: Codable {
+        let schema: String
+        let baselineID: String
+        let blobs: [String]
+        let writtenAt: String
+    }
+
+    static let fileName = "tweak-write.json"
+
+    static func url(game: GameInstall) -> URL {
+        game.stateDirectory.appending(path: fileName, directoryHint: .notDirectory)
+    }
+
+    static func exists(game: GameInstall) -> Bool {
+        FileManager.default.fileExists(atPath: url(game: game).path)
+    }
+
+    static func write(game: GameInstall, baselineID: String, blobs: [String]) throws {
+        let document = Document(
+            schema: "archive-loader-tweak-write/v1",
+            baselineID: baselineID,
+            blobs: blobs.sorted(),
+            writtenAt: ISO8601DateFormatter().string(from: Date())
+        )
+        try FileManager.default.createDirectory(
+            at: game.stateDirectory,
+            withIntermediateDirectories: true
+        )
+        let marker = url(game: game)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(document).write(to: marker, options: .atomic)
+        let handle = try FileHandle(forWritingTo: marker)
+        try handle.synchronize()
+        try handle.close()
+    }
+
+    static func clear(game: GameInstall) throws {
+        guard exists(game: game) else { return }
+        try FileManager.default.removeItem(at: url(game: game))
+    }
+}
+
 enum RunCommand {
     static func run(_ args: [String]) throws {
         var arguments = args
         var vanillaOnError = false
         var useCache = true
+        var noTweaks = false
         var explicitGame: String?
         var debug = ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
 
@@ -34,6 +122,9 @@ enum RunCommand {
             case "--no-cache":
                 useCache = false
                 index += 1
+            case "--no-tweaks":
+                noTweaks = true
+                index += 1
             case "--game":
                 guard index + 1 < arguments.count else { throw CLIError.missingValue("--game") }
                 explicitGame = arguments[index + 1]
@@ -45,7 +136,7 @@ enum RunCommand {
 
         guard let launcherPath = wrapped.first else {
             throw CLIError.usage(
-                "usage: archive-loader run [--debug] [--vanilla-on-error] [--no-cache] [--game GAME_DIR] -- <launcher> [args...]"
+                "usage: archive-loader run [--debug] [--vanilla-on-error] [--no-cache] [--no-tweaks] [--game GAME_DIR] -- <launcher> [args...]"
             )
         }
         let launcherArguments = Array(wrapped.dropFirst())
@@ -73,6 +164,7 @@ enum RunCommand {
                 launcherArguments: launcherArguments,
                 vanillaOnError: vanillaOnError,
                 useCache: useCache,
+                noTweaks: noTweaks,
                 log: log
             )
         }
@@ -87,6 +179,7 @@ enum RunCommand {
         launcherArguments: [String],
         vanillaOnError: Bool,
         useCache: Bool,
+        noTweaks: Bool,
         log: SessionLog
     ) throws {
 
@@ -144,6 +237,42 @@ enum RunCommand {
             )
         }
 
+        // Build the complete tweak image before the first live archive or
+        // TweakDB write. The returned URLs remain stable until delivery, so
+        // discovery, parsing, encoding, mutation, and verification all belong
+        // to preflight rather than a partially applied launch.
+        let tweakMods: [URL]
+        var stagedTweaks: TweakBuildResult?
+        if noTweaks {
+            tweakMods = []
+            stagedTweaks = nil
+            log.info("Tweaks skipped (--no-tweaks)")
+        } else {
+            tweakMods = try TweakModCollection.mods(game: game)
+            if tweakMods.isEmpty {
+                stagedTweaks = nil
+                if manifest.tweaks.isEmpty {
+                    log.note(
+                        "the published baseline is archive-only; tweak mods are disabled"
+                            + " until archive-loader setup --rebaseline captures TweakDB"
+                    )
+                }
+            } else {
+                guard !manifest.tweaks.isEmpty else {
+                    throw TweakBuildError.noTweakBaseline
+                }
+                guard let result = try buildTweaks(
+                    game: game,
+                    useCache: useCache,
+                    log: { message in log.warning(message) }
+                ) else {
+                    throw TweakBuildError.noTweakMods
+                }
+                stagedTweaks = result
+            }
+        }
+        defer { stagedTweaks?.removeTemporaryBuild() }
+
         // 1. Restore first. A prior SIGKILL or power loss leaves the install
         //    patched, and patching again on top would stack a second edit.
         log.step("Restoring \(manifest.archives.count) archives...")
@@ -162,6 +291,7 @@ enum RunCommand {
         // 2. Patch, unless there is nothing to patch.
         let mods = try ModCollection.enabledMods(game: game)
         var patchedArchives: Set<URL> = []
+        var allowTweakDelivery = true
         if mods.isEmpty {
             // Not an error: a no-mod run still restores, cleans up, and
             // launches. It is the normal way to play unmodded through the
@@ -211,6 +341,7 @@ enum RunCommand {
                 }
                 log.warning("\(patchError)")
                 log.warning("--vanilla-on-error given; restoring and launching unmodded")
+                allowTweakDelivery = false
                 do {
                     try restore(store: store, ledger: ledger)
                 } catch {
@@ -225,7 +356,47 @@ enum RunCommand {
             }
         }
 
-        // 3. Launch, then restore on every path out.
+        // 3. Deliver the already verified TweakDB image only after the archive
+        // layer succeeds. No tweak interpretation or mutation occurs here.
+        if allowTweakDelivery, let result = stagedTweaks {
+            do {
+                try deliverTweaks(result, game: game, log: log)
+                log.info(
+                    "Tweaks: " + String(result.applied) + " operations from "
+                        + String(result.plan.mods.count) + " mods"
+                        + (result.cacheHit ? " (cache hit)" : "")
+                )
+                for loser in result.plan.losers {
+                    log.detail(
+                        "tweak conflict: " + loser.flat + " — " + loser.mod.lastPathComponent
+                            + " loses to " + loser.winner.lastPathComponent
+                    )
+                }
+            } catch {
+                let tweakError = error
+                if let restoreError = restoreQuietly(store: store, ledger: ledger, log: log) {
+                    reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
+                    reportRestoreFailure(restoreError, game: game, log: log)
+                    exitAfterReporting(
+                        restoreFailureExitCode,
+                        log: log,
+                        timingSummaryReported: &timingSummaryReported
+                    )
+                }
+
+                guard vanillaOnError else {
+                    throw CLIError.usage(
+                        String(describing: tweakError)
+                            + "\n\nThe launch was aborted and the install left pristine."
+                            + " Pass --vanilla-on-error to launch unmodded instead."
+                    )
+                }
+                log.warning(String(describing: tweakError))
+                log.warning("--vanilla-on-error given; tweak layer skipped and launching vanilla")
+            }
+        }
+
+        // 4. Launch, then restore on every path out.
         var outcome: LaunchOutcome
 
         // Started before the launcher so that a foreground launcher's session
@@ -298,6 +469,362 @@ enum RunCommand {
                 launcherCode,
                 log: log,
                 timingSummaryReported: &timingSummaryReported
+            )
+        }
+    }
+
+    /// Builds from the published generation into the loader-owned tweak cache.
+    /// It never reads a live blob as a source and never writes into r6/cache.
+    static func buildTweaks(
+        game: GameInstall,
+        useCache: Bool,
+        log: (String) -> Void = { print("warning: \($0)") }
+    ) throws -> TweakBuildResult? {
+        let mods = try TweakModCollection.mods(game: game)
+        guard !mods.isEmpty else { return nil }
+
+        let store = BaselineStore(game: game)
+        guard let manifest = try store.publishedManifest(),
+              store.publishedGeneration != nil else {
+            throw BaselineError.noPublishedBaseline(game.pristinePointer)
+        }
+        guard !manifest.tweaks.isEmpty else {
+            throw TweakBuildError.noTweakBaseline
+        }
+
+        let inventory = try ArchiveXLDetector.scan(mods: mods, game: game)
+        guard inventory.isEmpty else {
+            throw TweakBuildError.archiveXL(inventory.diagnostics)
+        }
+
+        let sources = try tweakSources(game: game, manifest: manifest, store: store)
+        let plan = try TweakPlanner.plan(mods: mods, blobs: sources)
+        let fingerprint = try TweakFingerprint.compute(
+            game: game,
+            manifest: manifest,
+            mods: mods,
+            inventory: inventory
+        )
+        let cache = TweakCacheStore(game: game)
+
+        if useCache {
+            do {
+                if let cached = try cache.load(fingerprint) {
+                    do {
+                        try verifyTweaks(cached, plan: plan, sources: sources)
+                        return TweakBuildResult(
+                            blobs: cached,
+                            plan: plan,
+                            fingerprint: fingerprint,
+                            cacheHit: true,
+                            applied: plan.operationCount,
+                            temporaryDirectory: nil
+                        )
+                    } catch {
+                        log("tweak cache verification failed; rebuilding from the published baseline: \(error)")
+                        try? FileManager.default.removeItem(at: cache.directory(for: fingerprint))
+                    }
+                } else if FileManager.default.fileExists(atPath: cache.directory(for: fingerprint).path) {
+                    log("tweak cache is invalid; rebuilding from the published baseline")
+                }
+            } catch {
+                log("tweak cache could not be read; rebuilding from the published baseline: \(error)")
+            }
+        }
+
+        let staging = game.tweakCacheRoot
+            .appending(path: ".build-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        do {
+            var built: [URL] = []
+            for source in sources {
+                var blob = try TweakBlob.read(source)
+                for work in plan.workByBlob[source.normalizedFileURL] ?? [] {
+                    try apply(work.operation, to: &blob)
+                }
+
+                do {
+                    try TweakVerifier.validate(blob)
+                } catch {
+                    throw TweakBuildError.verificationFailed([String(describing: error)])
+                }
+
+                let target = staging.appending(path: source.lastPathComponent)
+                try TweakBlobWriter.write(blob, to: target)
+                built.append(target)
+            }
+            try verifyTweaks(built, plan: plan, sources: sources)
+
+            guard useCache else {
+                return TweakBuildResult(
+                    blobs: built,
+                    plan: plan,
+                    fingerprint: fingerprint,
+                    cacheHit: false,
+                    applied: plan.operationCount,
+                    temporaryDirectory: staging
+                )
+            }
+
+            do {
+                try cache.store(built, for: fingerprint)
+                let installed = try cache.load(fingerprint) ?? built
+                try verifyTweaks(installed, plan: plan, sources: sources)
+                try? FileManager.default.removeItem(at: staging)
+                return TweakBuildResult(
+                    blobs: installed,
+                    plan: plan,
+                    fingerprint: fingerprint,
+                    cacheHit: false,
+                    applied: plan.operationCount,
+                    temporaryDirectory: nil
+                )
+            } catch {
+                // Cache writes are optional. The freshly verified staging
+                // generation remains usable for this run.
+                log("tweak cache write failed; using the verified uncached build: \(error)")
+                return TweakBuildResult(
+                    blobs: built,
+                    plan: plan,
+                    fingerprint: fingerprint,
+                    cacheHit: false,
+                    applied: plan.operationCount,
+                    temporaryDirectory: staging
+                )
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: staging)
+            throw error
+        }
+    }
+
+    static func deliverTweaks(
+        _ result: TweakBuildResult,
+        game: GameInstall,
+        log: SessionLog
+    ) throws {
+        let paths = result.blobs.map { $0.lastPathComponent }
+        try TweakWriteMarker.write(
+            game: game,
+            baselineID: result.fingerprint.value,
+            blobs: paths
+        )
+        do {
+            for blob in result.blobs.sorted(by: { utf8Precedes($0.path, $1.path) }) {
+                let destination = game.tweakCacheDirectory.appending(path: blob.lastPathComponent)
+                try Clone.replaceFile(from: blob, to: destination)
+                log.detail("tweak wrote " + destination.lastPathComponent)
+            }
+        } catch {
+            // The marker deliberately remains until a verified restore proves
+            // that every recorded baseline blob is back in place.
+            throw error
+        }
+    }
+
+    static func tweakSources(
+        game: GameInstall,
+        manifest: BaselineManifest,
+        store: BaselineStore
+    ) throws -> [URL] {
+        try BaselineManifest.validateTweakEntries(manifest.tweaks)
+        guard let generation = store.publishedGeneration else {
+            throw BaselineError.noPublishedBaseline(game.pristinePointer)
+        }
+
+        return try manifest.tweaks.sorted { utf8Precedes($0.path, $1.path) }.map { entry in
+            let source = generation.appending(path: entry.path).standardizedFileURL
+            let prefix = generation.standardizedFileURL.path + "/"
+            guard source.path.hasPrefix(prefix),
+                  FileManager.default.isReadableFile(atPath: source.path) else {
+                throw TweakBuildError.missingBaselineBlob(entry.path)
+            }
+            return source
+        }
+    }
+
+    private static func verifyTweaks(
+        _ blobs: [URL],
+        plan: TweakPlan,
+        sources: [URL]
+    ) throws {
+        let byName = Dictionary(uniqueKeysWithValues: blobs.map { ($0.lastPathComponent, $0) })
+        for source in sources {
+            guard let blobURL = byName[source.lastPathComponent] else {
+                throw TweakBuildError.verificationFailed([
+                    "missing generated blob \(source.lastPathComponent)"
+                ])
+            }
+            let blob: TweakBlob
+            do {
+                blob = try TweakBlob.read(blobURL)
+                try TweakVerifier.validate(blob)
+            } catch {
+                throw TweakBuildError.verificationFailed([
+                    blobURL.lastPathComponent + ": " + String(describing: error)
+                ])
+            }
+
+            for work in plan.workByBlob[source.normalizedFileURL] ?? [] {
+                guard let located = blob.find(flat: work.operation.targetFlat) else {
+                    throw TweakBuildError.verificationFailed([
+                        work.operation.targetFlat + ": not present after patching"
+                    ])
+                }
+                if case let .assign(_, _, literal) = work.operation {
+                    let block = blob.blocks[located.blockIndex]
+                    let stored = block.values[Int(block.entries[located.entryIndex].valueIndex)]
+                    let expected = try encode(literal, as: block.type, flat: work.operation.targetFlat)
+                    let matches: Bool
+                    do {
+                        matches = try TweakValueOrder.equivalent(stored, expected, type: block.type)
+                    } catch {
+                        throw TweakBuildError.verificationFailed([
+                            work.operation.targetFlat + ": stored value could not be compared: "
+                                + String(describing: error)
+                        ])
+                    }
+                    guard matches else {
+                        throw TweakBuildError.verificationFailed([
+                            work.operation.targetFlat + ": stored value does not match the plan"
+                        ])
+                    }
+                }
+            }
+        }
+    }
+
+    private static func apply(_ operation: TweakOperation, to blob: inout TweakBlob) throws {
+        switch operation {
+        case let .assign(flat, _, literal):
+            guard let located = blob.find(flat: flat) else {
+                throw TweakBuildError.invalidOperation("no flat named \(flat) exists in this blob")
+            }
+            let type = blob.blocks[located.blockIndex].type
+            try blob.assign(flat: flat, value: encode(literal, as: type, flat: flat))
+
+        case let .arrayAppend(flat, _, literals), let .arrayRemove(flat, _, literals):
+            guard let located = blob.find(flat: flat),
+                  case let .array(elementType) = blob.blocks[located.blockIndex].type else {
+                throw TweakBuildError.invalidOperation("\(flat) is not an array flat")
+            }
+            let block = blob.blocks[located.blockIndex]
+            let current = block.values[Int(block.entries[located.entryIndex].valueIndex)]
+            var elements = try decodeArray(current, elementType: elementType)
+            let values = try literals.map { try encode($0, as: elementType, flat: flat) }
+
+            switch operation {
+            case .arrayAppend:
+                for value in values where !elements.contains(value) { elements.append(value) }
+            case .arrayRemove:
+                elements.removeAll { values.contains($0) }
+            default:
+                break
+            }
+
+            elements.sort {
+                (try? TweakValueOrder.precedes($0, $1, type: elementType)) ?? false
+            }
+            try blob.assign(flat: flat, value: encodeArray(elements))
+        }
+    }
+
+    private static func encodeArray(_ elements: [Data]) -> Data {
+        var output = TweakPacked.encode(elements.count, wideFlag: false)
+        for element in elements { output.append(element) }
+        return output
+    }
+
+    private static func decodeArray(_ value: Data, elementType: TweakValueType) throws -> [Data] {
+        let (count, start) = try TweakPacked.read(value, at: 0)
+        var cursor = start
+        var elements: [Data] = []
+        elements.reserveCapacity(count)
+        for _ in 0..<count {
+            let (element, next) = try readValue(value, at: cursor, type: elementType)
+            elements.append(element)
+            cursor = next
+        }
+        guard cursor == value.count else {
+            throw TweakBuildError.invalidOperation("array value contains trailing bytes")
+        }
+        return elements
+    }
+
+    private static func readValue(
+        _ data: Data,
+        at offset: Int,
+        type: TweakValueType
+    ) throws -> (Data, Int) {
+        if let width = type.fixedWidth {
+            guard offset >= 0, offset <= data.count, width <= data.count - offset else {
+                throw TweakBuildError.invalidOperation("truncated \(type.typeName) value")
+            }
+            return (data.subdata(in: offset..<offset + width), offset + width)
+        }
+        if type.isStringLike {
+            let (length, next) = try TweakPacked.read(data, at: offset)
+            guard length >= 0, next <= data.count, length <= data.count - next else {
+                throw TweakBuildError.invalidOperation("truncated \(type.typeName) value")
+            }
+            return (data.subdata(in: offset..<next + length), next + length)
+        }
+        guard let element = type.elementType else {
+            throw TweakBuildError.invalidOperation("unsupported \(type.typeName) value")
+        }
+        let (count, start) = try TweakPacked.read(data, at: offset)
+        var cursor = start
+        for _ in 0..<count { cursor = try readValue(data, at: cursor, type: element).1 }
+        guard cursor <= data.count else {
+            throw TweakBuildError.invalidOperation("truncated \(type.typeName) value")
+        }
+        return (data.subdata(in: offset..<cursor), cursor)
+    }
+
+    private static func encode(
+        _ literal: TweakLiteral,
+        as type: TweakValueType,
+        flat: String
+    ) throws -> Data {
+        func u32(_ value: UInt32) -> Data {
+            withUnsafeBytes(of: value.littleEndian) { Data($0) }
+        }
+        func u64(_ value: UInt64) -> Data {
+            withUnsafeBytes(of: value.littleEndian) { Data($0) }
+        }
+        func packed(_ text: String) -> Data {
+            TweakPacked.encode(text.utf8.count, wideFlag: !text.isEmpty) + Data(text.utf8)
+        }
+
+        guard type != .color else {
+            throw TweakBuildError.invalidOperation("\(flat) uses unsupported Color values")
+        }
+        switch (type, literal) {
+        case let (.int32, .int(value)):
+            return u32(UInt32(bitPattern: value))
+        case let (.float, .float(value)):
+            return u32(value.bitPattern)
+        case let (.float, .int(value)):
+            return u32(Float(value).bitPattern)
+        case let (.bool, .bool(value)):
+            return Data([value ? 1 : 0])
+        case let (.string, .string(value)):
+            return packed(value)
+        case let (.cname, .string(value)), let (.cname, .cname(value)):
+            return packed(value)
+        case let (.tweakDBID, .string(value)), let (.tweakDBID, .tweakDBID(value)):
+            let id = TweakBlob.tweakDBID(value)
+            return u32(id.hash) + u32(id.length)
+        case let (.locKeyWrapper, .int(value)):
+            return u64(UInt64(UInt32(bitPattern: value)))
+        case let (.locKeyWrapper, .locKey(value)):
+            return u64(value)
+        case let (.array(elementType), .array(values)):
+            return encodeArray(try values.map { try encode($0, as: elementType, flat: flat) })
+        default:
+            throw TweakBuildError.invalidOperation(
+                flat + " cannot take a " + type.typeName + " value from this document"
             )
         }
     }
@@ -527,6 +1054,24 @@ enum RunCommand {
     static func restore(store: BaselineStore, ledger: ArtifactLedger) throws {
         _ = try store.restore()
         try ledger.removeRecorded()
+
+        let archives = try store.compareLive(deep: true)
+        guard archives.isPristine else {
+            throw CLIError.usage(
+                "archives still differ from the published baseline after restoration:\n"
+                    + archives.drifted.map { "  \($0)" }.joined(separator: "\n")
+            )
+        }
+        if let manifest = try store.publishedManifest(), !manifest.tweaks.isEmpty {
+            let tweaks = try store.compareLiveTweaks(deep: true)
+            guard tweaks.isPristine else {
+                throw CLIError.usage(
+                    "TweakDB blobs still differ from the published baseline after restoration:\n"
+                        + tweaks.drifted.map { "  \($0)" }.joined(separator: "\n")
+                )
+            }
+        }
+        try TweakWriteMarker.clear(game: store.game)
     }
 
     static func restoreQuietly(
@@ -634,4 +1179,8 @@ private final class LockedProcessTarget: @unchecked Sendable {
             mutex.unlock()
         }
     }
+}
+
+private func utf8Precedes(_ left: String, _ right: String) -> Bool {
+    Array(left.utf8).lexicographicallyPrecedes(Array(right.utf8))
 }

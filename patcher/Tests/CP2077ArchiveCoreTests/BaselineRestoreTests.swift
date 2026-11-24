@@ -34,6 +34,28 @@ private func capturedGame() throws -> (TestGame, BaselineStore, BaselineManifest
     }
 }
 
+@Test func corruptArchiveGenerationIsRejectedBeforeAnyLiveReplacement() throws {
+    let (game, store, manifest) = try capturedGame()
+    defer { game.cleanUp() }
+
+    let content = game.gameRoot.appending(path: "archive/Mac/content/basegame_1_engine.archive")
+    let ep1 = game.gameRoot.appending(path: "archive/Mac/ep1/ep1_1_main.archive")
+    let contentBefore = Data("live-content-must-remain".utf8)
+    let ep1Before = Data("live-ep1-must-remain".utf8)
+    try contentBefore.write(to: content)
+    try ep1Before.write(to: ep1)
+
+    let corruptEntry = try #require(manifest.archives.first)
+    let corruptSource = store.generationDirectory(id: manifest.id).appending(path: corruptEntry.path)
+    var corruptBytes = try Data(contentsOf: corruptSource)
+    corruptBytes[corruptBytes.startIndex] ^= 0xFF
+    try corruptBytes.write(to: corruptSource)
+
+    #expect(throws: (any Error).self) { _ = try store.restore() }
+    #expect(try Data(contentsOf: content) == contentBefore)
+    #expect(try Data(contentsOf: ep1) == ep1Before)
+}
+
 @Test func restoreWithoutAPublishedBaselineRefuses() throws {
     let game = try TestGame()
     defer { game.cleanUp() }

@@ -6,7 +6,8 @@ INSTALL
   2. Run:  ./archive-loader/setup.command
      It captures a baseline copy of your official archives and prints the
      command to launch with.
-  3. Put .archive mods in archive-loader/mods/enabled/
+  3. Put .archive mods in archive-loader/mods/enabled/. TweakDB mods go in
+     archive-loader/mods/tweaks/.
 
 LAUNCH
   Run whatever you already use to start the game, through archive-loader:
@@ -37,6 +38,16 @@ RECOVER
   Each run, setup, and restore records a session under archive-loader/logs/.
   archive-loader/logs/latest.log points to the most recent session.
 
+TWEAKDB
+  The offline builder supports assignments to existing flats and array append/
+  remove operations in .yaml, .yml, and .tweak files. Use:
+
+      ./archive-loader/bin/archive-loader tweaks build --game "/path/to/Cyberpunk 2077"
+
+  Select `base` or `ep1` explicitly when needed. ArchiveXL is not supported:
+  exact ArchiveXL dependency markers fail preflight before game data changes.
+  Use `run --no-tweaks` for archive-only launches.
+
 WHAT THE BASELINE IS
   setup clones your official archives into archive-loader/baselines/ and
   records their sizes and SHA-256 hashes. Restoring means cloning those back.
@@ -49,6 +60,7 @@ WHAT THE BASELINE IS
   Run your storefront's verify/repair before setup.
 
 SCOPE
-  Apple Silicon only. Archive mods only — this does not install or manage
+  Apple Silicon only. Archive mods and offline existing-flat TweakDB edits —
+  this does not install or manage
   RED4ext, Frida, scc, or inputloader, though it works alongside them if you
   already have them.

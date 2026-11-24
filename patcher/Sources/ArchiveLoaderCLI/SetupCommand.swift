@@ -9,8 +9,13 @@ enum SetupCommand {
         let options = try Options(args)
         let assumeClean = args.contains("--assume-clean")
         let rebaseline = args.contains("--rebaseline")
+        let trustLiveTweaks = args.contains("--trust-live-tweaks")
         let debug = args.contains("--debug")
             || ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
+
+        guard !trustLiveTweaks || rebaseline else {
+            throw CLIError.usage("--trust-live-tweaks requires --rebaseline")
+        }
 
         let explicitRoot = options.value("--game").map { URL(fileURLWithPath: $0, isDirectory: true) }
         let candidates = try GameDiscovery.resolve(explicitRoot: explicitRoot)
@@ -33,6 +38,7 @@ enum SetupCommand {
                 candidate: candidate,
                 assumeClean: assumeClean,
                 rebaseline: rebaseline,
+                trustLiveTweaks: trustLiveTweaks,
                 log: log
             )
         }
@@ -44,6 +50,7 @@ enum SetupCommand {
         candidate: GameCandidate,
         assumeClean: Bool,
         rebaseline: Bool,
+        trustLiveTweaks: Bool,
         log: SessionLog
     ) throws {
 
@@ -57,6 +64,17 @@ enum SetupCommand {
 
         // The game can start while the lock is being acquired.
         try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
+
+        // A setup/rebaseline must not publish a generation while the install
+        // advertises a runtime capability this loader cannot provide.
+        let tweakMods = try TweakModCollection.mods(game: game)
+        let archiveXL = try ArchiveXLDetector.scan(mods: tweakMods, game: game)
+        guard archiveXL.isEmpty else {
+            throw CLIError.usage(
+                "ArchiveXL is unsupported by this loader; nothing was changed:\n"
+                    + archiveXL.diagnostics.map { diagnostic in "  " + diagnostic }.joined(separator: "\n")
+            )
+        }
 
         try installCompatibilityPackageIfPresent(game: game, log: log)
 
@@ -72,6 +90,7 @@ enum SetupCommand {
                 store: store,
                 candidate: candidate,
                 assumeClean: assumeClean,
+                trustLiveTweaks: trustLiveTweaks,
                 log: log
             )
         } else if let existing = try store.publishedManifest() {

@@ -27,6 +27,9 @@ public struct BaselineManifest: Codable, Sendable, Equatable {
     public let storefront: String
     public let loaderVersion: String
     public let archives: [BaselineEntry]
+    /// TweakDB blobs relative to the game root, rather than archive/Mac.
+    /// Older generations omit this key and decode as archive-only baselines.
+    public let tweaks: [BaselineEntry]
 
     public init(
         id: String,
@@ -34,7 +37,8 @@ public struct BaselineManifest: Codable, Sendable, Equatable {
         gameVersion: String,
         storefront: String,
         loaderVersion: String,
-        archives: [BaselineEntry]
+        archives: [BaselineEntry],
+        tweaks: [BaselineEntry] = []
     ) {
         self.id = id
         self.capturedAt = capturedAt
@@ -42,6 +46,38 @@ public struct BaselineManifest: Codable, Sendable, Equatable {
         self.storefront = storefront
         self.loaderVersion = loaderVersion
         self.archives = archives
+        self.tweaks = tweaks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, capturedAt, gameVersion, storefront, loaderVersion, archives, tweaks
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        capturedAt = try container.decode(String.self, forKey: .capturedAt)
+        gameVersion = try container.decode(String.self, forKey: .gameVersion)
+        storefront = try container.decode(String.self, forKey: .storefront)
+        loaderVersion = try container.decode(String.self, forKey: .loaderVersion)
+        archives = try container.decode([BaselineEntry].self, forKey: .archives)
+        tweaks = try container.decodeIfPresent([BaselineEntry].self, forKey: .tweaks) ?? []
+        try Self.validateTweakEntries(tweaks)
+    }
+
+    /// The only paths a baseline may ever carry for the gameplay database.
+    public static let allowedTweakPaths: Set<String> = [
+        "r6/cache/tweakdb.bin",
+        "r6/cache/tweakdb_ep1.bin",
+    ]
+
+    public static func validateTweakEntries(_ entries: [BaselineEntry]) throws {
+        var seen = Set<String>()
+        for entry in entries {
+            guard allowedTweakPaths.contains(entry.path), seen.insert(entry.path).inserted else {
+                throw BaselineError.invalidTweakPath(entry.path)
+            }
+        }
     }
 }
 
@@ -49,6 +85,8 @@ public enum BaselineError: Error, CustomStringConvertible {
     case noPublishedBaseline(URL)
     case unreadableManifest(URL)
     case noOfficialArchives(URL)
+    case invalidTweakPath(String)
+    case legacyTweakCapture(URL)
 
     public var description: String {
         switch self {
@@ -61,6 +99,11 @@ public enum BaselineError: Error, CustomStringConvertible {
         case let .noOfficialArchives(url):
             return "found no official archives under \(url.path);"
                 + " this does not look like a Cyberpunk 2077 installation"
+        case let .invalidTweakPath(path):
+            return "baseline contains an invalid TweakDB path \(path);"
+                + " only r6/cache/tweakdb.bin and r6/cache/tweakdb_ep1.bin are allowed"
+        case let .legacyTweakCapture(url):
+            return "cannot capture live TweakDB blob \(url.path) into a legacy archive-only baseline"
         }
     }
 }
