@@ -56,6 +56,8 @@ struct ArchiveLoaderCLI {
             try RestoreCommand.run(args)
         case "status":
             try StatusCommand.run(args)
+        case "runtime":
+            try runtime(args)
         case "cache":
             try cache(args)
         case "tweaks":
@@ -285,6 +287,52 @@ struct ArchiveLoaderCLI {
         }
     }
 
+    static func runtime(_ args: [String]) throws {
+        guard args.first == "remove" else {
+            throw CLIError.usage("usage: archive-loader runtime remove [--debug] [--game GAME_DIR]")
+        }
+
+        let commandArgs = Array(args.dropFirst())
+        let options = try Options(commandArgs)
+        let debug = commandArgs.contains("--debug")
+            || ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
+        let candidates = try GameDiscovery.resolve(
+            explicitRoot: options.value("--game").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        )
+        guard let candidate = candidates.first, candidates.count == 1 else {
+            throw CLIError.usage("could not resolve a single game installation; pass --game")
+        }
+
+        let game = GameInstall(root: candidate.root)
+        let log = try SessionLog(command: "runtime remove", logsDirectory: game.logsDirectory, debug: debug)
+        try reportingErrors(to: log) {
+            try GameRunningGuard.refuseIfRunning(
+                game: game,
+                consequence: "removing the compatibility runtime would rewrite files underneath it"
+            )
+            let lock = try InstallationLock.acquire(game: game)
+            defer { lock.release() }
+            try GameRunningGuard.refuseIfRunning(
+                game: game,
+                consequence: "removing the compatibility runtime would rewrite files underneath it"
+            )
+
+            let service = game.installationTransactionService
+            _ = try service.recoverAtStartup()
+            guard try service.inspect().current != nil else {
+                throw CLIError.usage("no installed compatibility runtime was found")
+            }
+
+            var removed: [String] = []
+            while let current = try service.inspect().current {
+                _ = try service.removeCommitted(transactionID: current.transactionID)
+                removed.append(current.transactionID)
+            }
+            log.info("Removed compatibility runtime transaction(s): \(removed.joined(separator: ", "))")
+            log.info("Permanent runtime files were removed; session archives and TweakDB remain unchanged.")
+        }
+    }
+
     /// Both patch commands rewrite official archives in place.
     static let patchConsequence = "patching now would rewrite archives underneath it"
 
@@ -411,7 +459,7 @@ struct ArchiveLoaderCLI {
         archive-loader
 
         Commands:
-          setup [--debug] [--game GAME_DIR] [--rebaseline] [--assume-clean] [--trust-live-tweaks]
+          setup [--debug] [--game GAME_DIR] [--runtime-package PATH] [--rebaseline] [--assume-clean] [--trust-live-tweaks]
           run [--debug] [--vanilla-on-error] [--no-cache] [--no-tweaks] [--game GAME_DIR] -- <launcher> [args...]
           scan MOD.archive [...]
           detect [--all] [--format text|json] [--game GAME_DIR]
@@ -419,6 +467,7 @@ struct ArchiveLoaderCLI {
           patch --game GAME_DIR [--strategy hybrid|aggressive] [--target TARGET.archive] --mods MOD.archive [...]
           restore [--debug] [--game GAME_DIR]
           status [--game GAME_DIR] [--deep]
+          runtime remove [--debug] [--game GAME_DIR]
           cache clear [--game GAME_DIR]
           tweaks build --game GAME_DIR [--no-cache]
           --version

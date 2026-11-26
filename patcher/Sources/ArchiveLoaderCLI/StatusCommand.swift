@@ -20,7 +20,31 @@ enum StatusCommand {
         let storefront = candidate.sources.joined(separator: "+")
         print("Game        \(game.root.path)   (\(storefront), \(candidate.version))")
 
-        let tweakMods = try TweakModCollection.mods(game: game)
+        // Inspection is intentionally read-only. In particular, do not call
+        // recoverAtStartup here: status is the diagnostic command for an
+        // interrupted transaction.
+        let installation = try game.installationTransactionService.inspect()
+        if let interrupted = installation.interrupted.first {
+            print(
+                "Runtime     interrupted transaction \(interrupted.transactionID)"
+                    + " (\(interrupted.phase.rawValue)); run restore or runtime remove"
+            )
+        } else if let current = installation.current {
+            if let manifest = try? CompatibilityManifest.load(from: game.compatibilityManifestURL),
+               manifest.frameworkRuntime != nil {
+                print("Runtime     active transaction \(current.transactionID)")
+            } else {
+                print("Compatibility active transaction \(current.transactionID)")
+            }
+        } else {
+            print("Runtime     inactive")
+        }
+
+        let requirements = try ModFrameworkRequirements.classify(game: game)
+        let tweakMods = requirements.offlineMods
+        if !requirements.runtimeOwnedMods.isEmpty {
+            print("framework mods  \(requirements.runtimeOwnedMods.count) require the native runtime")
+        }
         print("tweak mods  \(tweakMods.count) in \(game.tweakModsDirectory.path)")
         let archiveXL = try ArchiveXLDetector.scan(mods: tweakMods, game: game)
         for diagnostic in archiveXL.diagnostics {
@@ -73,7 +97,11 @@ enum StatusCommand {
                     game: game,
                     manifest: manifest,
                     mods: tweakMods,
-                    inventory: archiveXL
+                    inventory: archiveXL,
+                    requirements: requirements,
+                    runtimeProjectionInputs: try RunCommand.runtimeProjectionInputs(
+                        for: requirements
+                    )
                 )
                 do {
                     let cached = try TweakCacheStore(game: game).load(fingerprint) != nil

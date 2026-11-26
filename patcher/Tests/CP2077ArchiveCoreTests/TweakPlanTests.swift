@@ -106,3 +106,23 @@ private func writeTweakPlanBlob(
         _ = try TweakPlanner.plan(mods: [mod], blobs: [base])
     }
 }
+
+@Test func plannerSeparatesRuntimeOwnedDocumentsFromOfflineDocuments() throws {
+    let root = tweakPlanScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let offline = root.appending(path: "a-offline.yaml")
+    let runtime = root.appending(path: "z-runtime.yaml")
+    try Data("Items.Widget:\n  friendlyName: offline\n".utf8).write(to: offline)
+    try Data("requires: [TweakXL]\n".utf8).write(to: runtime)
+    let requirements = try ModFrameworkRequirements.classify(mods: [runtime, offline])
+
+    let partition = TweakPlanner.partition(
+        mods: [runtime, offline],
+        requirements: requirements
+    )
+
+    #expect(partition.offline == [offline.normalizedFileURL])
+    #expect(partition.runtimeOwned == [runtime.normalizedFileURL])
+}

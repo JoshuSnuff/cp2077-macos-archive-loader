@@ -45,6 +45,11 @@ enum RestoreCommand {
             consequence: "restoring now would rewrite archives underneath it"
         )
 
+        // Reconcile under the installation lock. A stale or tampered
+        // projection record must fail recovery rather than being ignored.
+        try FrameworkModProjection.reconcile(game: game)
+        _ = try game.installationTransactionService.recoverAtStartup()
+
         guard let manifest = try store.publishedManifest() else {
             throw CLIError.usage(
                 "no baseline has been captured for this installation, so there is nothing"

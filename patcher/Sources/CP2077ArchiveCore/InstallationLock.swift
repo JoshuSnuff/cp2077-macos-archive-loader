@@ -30,6 +30,9 @@ public enum InstallationLockError: Error, CustomStringConvertible {
 public final class InstallationLock {
     public let lockFile: URL
 
+    private static let ownershipLock = NSLock()
+    private static nonisolated(unsafe) var heldLockPaths: Set<String> = []
+
     private var descriptor: Int32
     private var isReleased = false
 
@@ -62,12 +65,30 @@ public final class InstallationLock {
             throw InstallationLockError.unopenable(lockFile, code)
         }
 
+        ownershipLock.lock()
+        heldLockPaths.insert(lockFile.standardizedFileURL.path)
+        ownershipLock.unlock()
         return InstallationLock(lockFile: lockFile, descriptor: descriptor)
+    }
+
+    /// True when this process already owns the installation lock. This lets a
+    /// recovery helper called from an already-locked run avoid a second flock
+    /// acquisition while still acquiring the kernel lock for fresh processes.
+    public static func isHeldByCurrentProcess(game: GameInstall) -> Bool {
+        ownershipLock.lock()
+        defer { ownershipLock.unlock() }
+        return heldLockPaths.contains(game.stateDirectory
+            .appending(path: "lock", directoryHint: .notDirectory)
+            .standardizedFileURL
+            .path)
     }
 
     public func release() {
         guard !isReleased else { return }
         isReleased = true
+        Self.ownershipLock.lock()
+        Self.heldLockPaths.remove(lockFile.standardizedFileURL.path)
+        Self.ownershipLock.unlock()
         flock(descriptor, LOCK_UN)
         close(descriptor)
     }

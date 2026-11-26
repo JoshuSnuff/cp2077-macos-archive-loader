@@ -24,6 +24,37 @@ public struct GameInstall: Sendable {
         InstalledLayout.loaderDirectory(inGameRoot: root)
     }
 
+    /// The self-hashed compatibility manifest and generation-zero marker.
+    public var compatibilityManifestURL: URL {
+        root.appending(path: "archive-loader/compatibility/manifest.json")
+    }
+
+    /// Compatibility installations are owned by the transaction service; this
+    /// convenience keeps callers on the same game-root-scoped service.
+    public var installationTransactionService: InstallationTransactionService {
+        InstallationTransactionService(gameRoot: root)
+    }
+
+    public var red4extDirectory: URL {
+        root.appending(path: "red4ext", directoryHint: .isDirectory)
+    }
+
+    public var red4extPluginsDirectory: URL {
+        red4extDirectory.appending(path: "plugins", directoryHint: .isDirectory)
+    }
+
+    public var red4extLoader: URL {
+        red4extDirectory.appending(path: "RED4ext.dylib")
+    }
+
+    public var tweakXLPlugin: URL {
+        red4extPluginsDirectory.appending(path: "TweakXL.dylib")
+    }
+
+    public var archiveXLPlugin: URL {
+        red4extPluginsDirectory.appending(path: "ArchiveXL.dylib")
+    }
+
     /// Captured baseline generations. Each subdirectory is one generation.
     public var baselinesDirectory: URL {
         loaderDirectory.appending(path: "baselines", directoryHint: .isDirectory)

@@ -9,6 +9,42 @@ INSTALL
   3. Put .archive mods in archive-loader/mods/enabled/. TweakDB mods go in
      archive-loader/mods/tweaks/.
 
+OPTIONAL NATIVE TWEAKXL/ARCHIVEXL RUNTIME
+  The loader does not download third-party runtimes. Prepare a directory that
+  extends the compatibility package for the exact supported game build:
+
+      runtime-package/archive-loader/compatibility/manifest.json
+      runtime-package/archive-loader/red4ext/RED4ext.dylib
+      runtime-package/archive-loader/red4ext/plugins/TweakXL.dylib
+      runtime-package/archive-loader/red4ext/plugins/ArchiveXL.dylib
+
+  The manifest uses cp2077-compatibility/v1, pins the game, distribution,
+  platform, arm64 architecture, version, bundle version, GOG build ID, and
+  executable UUID/hash, and lists every package file in its self-hashed
+  managedFiles inventory. Its frameworkRuntime section must declare:
+
+      schema: archive-loader-framework-runtime/v1
+      roles: red4ext-loader, tweakxl-plugin, archivexl-plugin
+      DYLD_INSERT_LIBRARIES: prepend red4ext/RED4ext.dylib
+      DYLD_FORCE_FLAT_NAMESPACE: replace with 1
+
+  Every required dylib must be an executable arm64 Mach-O, pass
+  codesign --verify --deep --strict, have a lowercase SHA-256 in the manifest,
+  and have no quarantine attribute. Do not copy these files into the game by
+  hand or rely on an implicit ad-hoc resign.
+
+  Install the package during first setup with:
+
+      ./archive-loader/bin/archive-loader setup \
+        --runtime-package "/path/to/runtime-package" \
+        --game "/path/to/Cyberpunk 2077" --assume-clean
+
+  A requested package is validated before setup writes a baseline or installs
+  anything, and it never silently falls back to offline behavior. Re-running
+  setup with --runtime-package upgrades the permanent runtime without replacing
+  an existing baseline; add --rebaseline only after verifying the official game
+  files again.
+
 LAUNCH
   Run whatever you already use to start the game, through archive-loader:
 
@@ -44,9 +80,30 @@ TWEAKDB
 
       ./archive-loader/bin/archive-loader tweaks build --game "/path/to/Cyberpunk 2077"
 
-  Select `base` or `ep1` explicitly when needed. ArchiveXL is not supported:
-  exact ArchiveXL dependency markers fail preflight before game data changes.
-  Use `run --no-tweaks` for archive-only launches.
+  Select `base` or `ep1` explicitly when needed. Exact root-level `requires` or
+  `dependencies` entries containing TweakXL or ArchiveXL select native runtime
+  handling instead. Those .yaml/.yml/.tweak documents are projected during the
+  session into r6/tweaks/ for TweakXL. ArchiveXL .xl payloads, and .archive
+  payloads with an exact ArchiveXL sidecar declaration, are projected into
+  archive/Mac/mod/. Runtime-owned documents are not sent through the offline
+  builder; documents without an exact marker keep their offline behavior.
+  Use --no-tweaks to skip only the offline TweakDB build.
+
+STATE AND RUNTIME REMOVAL
+  The verified compatibility package is permanent state: its RED4ext, TweakXL,
+  and ArchiveXL files remain installed across run and restore, under one
+  transaction recorded in archive-loader/state/. Archives, offline TweakDB
+  blobs, and native framework projections are session state. restore removes
+  session changes and keeps the runtime; status reports the two states
+  independently.
+
+  To remove only the permanent runtime, while the game is stopped, run:
+
+      ./archive-loader/bin/archive-loader runtime remove \
+        --game "/path/to/Cyberpunk 2077"
+
+  This restores the compatibility transaction snapshot, removes only files it
+  owns, preserves unrelated red4ext files, and leaves archives/TweakDB alone.
 
 WHAT THE BASELINE IS
   setup clones your official archives into archive-loader/baselines/ and
@@ -60,7 +117,7 @@ WHAT THE BASELINE IS
   Run your storefront's verify/repair before setup.
 
 SCOPE
-  Apple Silicon only. Archive mods and offline existing-flat TweakDB edits —
-  this does not install or manage
-  RED4ext, Frida, scc, or inputloader, though it works alongside them if you
-  already have them.
+  Apple Silicon only. Archive mods, offline existing-flat TweakDB edits, and
+  verified native TweakXL/ArchiveXL packages. The loader does not download or
+  build third-party frameworks, and it does not manage unrelated Frida, scc,
+  or inputloader installations.

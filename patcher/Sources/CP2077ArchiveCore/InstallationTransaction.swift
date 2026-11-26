@@ -2,10 +2,12 @@ import Darwin
 import Foundation
 
 public enum InstallationTransactionPhase: String, Codable, Sendable {
+    case snapshotting
     case prepared
     case staged
     case replacing
     case committed
+    case removing
     case rolledBack = "rolled-back"
 }
 
@@ -25,12 +27,105 @@ public struct InstallationManagedMapping: Codable, Equatable, Sendable {
 public struct InstallationTransactionMarker: Codable, Equatable, Sendable {
     public let transactionID: String
     public var phase: InstallationTransactionPhase
+    public let generation: UInt64
+    public let parentTransactionID: String?
     public let manifestSelfHash: String
     public let targetIdentity: CompatibilityTarget
     public let sourcePackageHashes: [InstallationSourceHash]
     public let snapshotPath: String
     public let stagingPath: String
     public var managedMappings: [InstallationManagedMapping]
+
+    public init(
+        transactionID: String,
+        phase: InstallationTransactionPhase,
+        manifestSelfHash: String,
+        targetIdentity: CompatibilityTarget,
+        sourcePackageHashes: [InstallationSourceHash],
+        snapshotPath: String,
+        stagingPath: String,
+        managedMappings: [InstallationManagedMapping],
+        generation: UInt64 = 0,
+        parentTransactionID: String? = nil
+    ) {
+        self.transactionID = transactionID
+        self.phase = phase
+        self.generation = generation
+        self.parentTransactionID = parentTransactionID
+        self.manifestSelfHash = manifestSelfHash
+        self.targetIdentity = targetIdentity
+        self.sourcePackageHashes = sourcePackageHashes
+        self.snapshotPath = snapshotPath
+        self.stagingPath = stagingPath
+        self.managedMappings = managedMappings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case transactionID
+        case phase
+        case generation
+        case parentTransactionID
+        case manifestSelfHash
+        case targetIdentity
+        case sourcePackageHashes
+        case snapshotPath
+        case stagingPath
+        case managedMappings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        transactionID = try container.decode(String.self, forKey: .transactionID)
+        phase = try container.decode(InstallationTransactionPhase.self, forKey: .phase)
+        generation = try container.decodeIfPresent(UInt64.self, forKey: .generation) ?? 0
+        parentTransactionID = try container.decodeIfPresent(String.self, forKey: .parentTransactionID)
+        manifestSelfHash = try container.decode(String.self, forKey: .manifestSelfHash)
+        targetIdentity = try container.decode(CompatibilityTarget.self, forKey: .targetIdentity)
+        sourcePackageHashes = try container.decode([InstallationSourceHash].self, forKey: .sourcePackageHashes)
+        snapshotPath = try container.decode(String.self, forKey: .snapshotPath)
+        stagingPath = try container.decode(String.self, forKey: .stagingPath)
+        managedMappings = try container.decode([InstallationManagedMapping].self, forKey: .managedMappings)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(transactionID, forKey: .transactionID)
+        try container.encode(phase, forKey: .phase)
+        try container.encode(generation, forKey: .generation)
+        try container.encodeIfPresent(parentTransactionID, forKey: .parentTransactionID)
+        try container.encode(manifestSelfHash, forKey: .manifestSelfHash)
+        try container.encode(targetIdentity, forKey: .targetIdentity)
+        try container.encode(sourcePackageHashes, forKey: .sourcePackageHashes)
+        try container.encode(snapshotPath, forKey: .snapshotPath)
+        try container.encode(stagingPath, forKey: .stagingPath)
+        try container.encode(managedMappings, forKey: .managedMappings)
+    }
+}
+
+/// Read-only view of the durable installation records and the legacy
+/// compatibility installation. The latter is synthesized in memory as
+/// generation zero until an explicit removal migrates it into the sole
+/// durable transaction marker.
+public struct InstallationTransactionInspection: Equatable, Sendable {
+    public let committed: [InstallationTransactionMarker]
+    public let interrupted: [InstallationTransactionMarker]
+    public let rolledBack: [InstallationTransactionMarker]
+    public let generationZero: InstallationTransactionMarker?
+    public let current: InstallationTransactionMarker?
+
+    public init(
+        committed: [InstallationTransactionMarker],
+        interrupted: [InstallationTransactionMarker],
+        rolledBack: [InstallationTransactionMarker],
+        generationZero: InstallationTransactionMarker?,
+        current: InstallationTransactionMarker?
+    ) {
+        self.committed = committed
+        self.interrupted = interrupted
+        self.rolledBack = rolledBack
+        self.generationZero = generationZero
+        self.current = current
+    }
 }
 
 public struct InstallationSnapshotEntry: Codable, Equatable, Sendable {
@@ -58,6 +153,7 @@ public enum InstallationTransactionError: Error, CustomStringConvertible {
     case snapshotInvalid(id: String, reason: String)
     case stagedFileInvalid(path: String, reason: String)
     case installedFileInvalid(path: String, reason: String)
+    case transactionNotCurrent(String)
     case installFailed(String)
     case rollbackFailed(original: String, rollback: String)
     case durabilityFailure(String)
@@ -82,6 +178,8 @@ public enum InstallationTransactionError: Error, CustomStringConvertible {
             return "staged managed file \(path) is invalid: \(reason)"
         case let .installedFileInvalid(path, reason):
             return "installed managed file \(path) is invalid: \(reason)"
+        case let .transactionNotCurrent(id):
+            return "installation transaction is not the current committed installation: \(id)"
         case let .installFailed(reason):
             return "installation failed and was rolled back: \(reason)"
         case let .rollbackFailed(original, rollback):
@@ -96,10 +194,11 @@ public enum InstallationTransactionError: Error, CustomStringConvertible {
 ///
 /// Callers may use `install` for the complete operation, or the explicit
 /// `prepare`, `stage`, and `commit` phases when command-level progress needs to
-/// be reported. Every write after `prepared` either commits or attempts a
-/// verified rollback. `recoverAtStartup` must run before other command work;
-/// `prepare` also invokes it so a future integration cannot accidentally skip
-/// recovery before beginning a new transaction.
+/// be reported. Every write after the prepared phase either commits, completes
+/// a durable removal, or attempts a verified rollback. recoverAtStartup must
+/// run before other command work; prepare also invokes it so a future
+/// integration cannot accidentally skip recovery before beginning a new
+/// transaction.
 public struct InstallationTransactionService {
     public let gameRoot: URL
 
@@ -132,7 +231,8 @@ public struct InstallationTransactionService {
         manifestDocument: CompatibilityManifestDocument,
         packageRoot: URL,
         verifiedIdentity: CompatibilityIdentity,
-        transactionID: String = UUID().uuidString.lowercased()
+        transactionID: String = UUID().uuidString.lowercased(),
+        afterMarkerPublished: () throws -> Void = {}
     ) throws -> InstallationTransactionMarker {
         try validateTransactionID(transactionID)
         _ = try recoverAtStartup()
@@ -170,21 +270,38 @@ public struct InstallationTransactionService {
                 actualSHA256: actual
             )
         }
-        let marker = InstallationTransactionMarker(
+        let parent = try currentCommittedMarker() ?? generationZeroMarker()
+        let generation: UInt64
+        if let parent {
+            guard parent.generation < UInt64.max else {
+                throw InstallationTransactionError.corruptMarker(
+                    "installation generation overflow after \(parent.transactionID)"
+                )
+            }
+            generation = parent.generation + 1
+        } else {
+            generation = 1
+        }
+        var marker = InstallationTransactionMarker(
             transactionID: transactionID,
-            phase: .prepared,
+            phase: .snapshotting,
             manifestSelfHash: manifestDocument.maskedSelfHash,
             targetIdentity: manifestDocument.manifest.target,
             sourcePackageHashes: sourceHashes,
             snapshotPath: snapshotRelativePath(transactionID),
             stagingPath: stagingRelativePath(transactionID),
-            managedMappings: mappings
+            managedMappings: mappings,
+            generation: generation,
+            parentTransactionID: parent?.transactionID
         )
 
         try createStateDirectories()
         try writeMarker(marker)
+        try afterMarkerPublished()
         try captureSnapshot(for: marker)
         _ = try verifiedSnapshot(for: marker)
+        marker.phase = .prepared
+        try writeMarker(marker)
         return marker
     }
 
@@ -279,18 +396,142 @@ public struct InstallationTransactionService {
     }
 
     public func rollback(transactionID: String) throws -> InstallationTransactionMarker {
-        var marker = try marker(transactionID: transactionID)
+        let marker = try marker(transactionID: transactionID)
         guard marker.phase != .rolledBack else { return marker }
+        if marker.phase == .snapshotting {
+            return try retireSnapshottingTransaction(marker)
+        }
+        if marker.phase == .removing {
+            return try finishRemoval(marker: marker)
+        }
+        return try restoreSnapshot(marker: marker)
+    }
+
+    /// Removes one current committed installation by restoring its complete
+    /// pre-replacement snapshot. The marker remains as a rolled-back audit
+    /// record, so the durable transaction marker is still the only commit
+    /// record and older committed generations can become current again.
+    public func removeCommitted(
+        transactionID: String,
+        beforeRemoving: (InstallationSnapshotEntry) throws -> Void = { _ in }
+    ) throws -> InstallationTransactionMarker {
+        _ = try recoverAtStartup()
+        if transactionID == "generation-0",
+           !fileManager.fileExists(atPath: markerURL(transactionID: transactionID).path) {
+            return try removeGenerationZero(beforeRemoving: beforeRemoving)
+        }
+
+        let marker = try marker(transactionID: transactionID)
+        if marker.phase == .rolledBack {
+            return marker
+        }
+        try requirePhase(marker, .committed)
+        try validateCommittedRecord(marker)
+        guard try currentCommittedMarker()?.transactionID == transactionID,
+              committedContentMatches(marker)
+        else {
+            throw InstallationTransactionError.transactionNotCurrent(transactionID)
+        }
+        var removing = marker
+        removing.phase = .removing
+        try writeMarker(removing)
+        return try finishRemoval(marker: removing, beforeMutating: beforeRemoving)
+    }
+
+    /// Rolls back active records, resumes durable removals, and verifies only
+    /// the current committed record. Snapshot and staging evidence are never
+    /// deleted by recovery.
+    @discardableResult
+    public func recoverAtStartup() throws -> [InstallationTransactionMarker] {
+        var recovered: [InstallationTransactionMarker] = []
+        for marker in try allMarkers() {
+            switch marker.phase {
+            case .snapshotting:
+                recovered.append(try retireSnapshottingTransaction(marker))
+            case .prepared, .staged, .replacing:
+                recovered.append(try rollback(transactionID: marker.transactionID))
+            case .removing:
+                recovered.append(try finishRemoval(marker: marker))
+            case .committed:
+                break
+            case .rolledBack:
+                break
+            }
+        }
+        _ = try verifyCommittedTransactions()
+        return recovered
+    }
+
+    public func verifyCommittedTransactions() throws -> [InstallationTransactionMarker] {
+        guard let current = try currentCommittedMarker() else {
+            return []
+        }
+        guard committedContentMatches(current) else {
+            throw InstallationTransactionError.installedFileInvalid(
+                path: "committed transaction set",
+                reason: "installed content does not match the current committed record"
+            )
+        }
+        return [current]
+    }
+
+    /// Inspects durable records without changing them. If no transaction
+    /// marker exists, an installed compatibility manifest is exposed as an
+    /// in-memory generation-zero record for migration and status consumers.
+    /// It is deliberately not persisted and never creates an active link.
+    public func inspect() throws -> InstallationTransactionInspection {
+        let markers = try allMarkers()
+        let committed = markers.filter { $0.phase == .committed }
+        let interrupted = markers.filter {
+            $0.phase == .snapshotting
+                || $0.phase == .prepared
+                || $0.phase == .staged
+                || $0.phase == .replacing
+                || $0.phase == .removing
+        }
+        let rolledBack = markers.filter { $0.phase == .rolledBack }
+
+        let currentCommitted = try currentCommittedMarker()
+        if interrupted.isEmpty,
+           let currentCommitted,
+           !committedContentMatches(currentCommitted) {
+            throw InstallationTransactionError.installedFileInvalid(
+                path: "committed transaction",
+                reason: "installed content does not match the current committed record"
+            )
+        }
+
+        let generationZero: InstallationTransactionMarker?
+        if committed.isEmpty && interrupted.isEmpty {
+            generationZero = try generationZeroMarker()
+        } else {
+            generationZero = nil
+        }
+        let current = interrupted.isEmpty ? (currentCommitted ?? generationZero) : nil
+        return InstallationTransactionInspection(
+            committed: committed,
+            interrupted: interrupted,
+            rolledBack: rolledBack,
+            generationZero: generationZero,
+            current: current
+        )
+    }
+
+    private func restoreSnapshot(
+        marker: InstallationTransactionMarker,
+        beforeMutating: (InstallationSnapshotEntry) throws -> Void = { _ in }
+    ) throws -> InstallationTransactionMarker {
         let snapshot = try verifiedSnapshot(for: marker)
 
         for entry in snapshot.entries {
+            try beforeMutating(entry)
             let destination = gameFileURL(entry.gamePath)
             if entry.wasPresent {
                 let source = snapshotFileURL(marker: marker, gamePath: entry.gamePath)
                 try atomicReplace(from: source, to: destination)
                 guard let mode = entry.mode, chmod(destination.path, mode_t(mode)) == 0 else {
                     throw InstallationTransactionError.snapshotInvalid(
-                        id: transactionID,
+                        id: marker.transactionID,
                         reason: "could not restore mode for \(entry.gamePath)"
                     )
                 }
@@ -299,7 +540,7 @@ public struct InstallationTransactionService {
                 let attributes = try fileManager.attributesOfItem(atPath: destination.path)
                 guard attributes[.type] as? FileAttributeType != .typeDirectory else {
                     throw InstallationTransactionError.snapshotInvalid(
-                        id: transactionID,
+                        id: marker.transactionID,
                         reason: "refusing to remove directory at absent managed path \(entry.gamePath)"
                     )
                 }
@@ -309,44 +550,52 @@ public struct InstallationTransactionService {
         }
 
         try verifyRestored(snapshot: snapshot)
-        marker.phase = .rolledBack
-        try writeMarker(marker)
-        return marker
+        var completed = marker
+        completed.phase = .rolledBack
+        try writeMarker(completed)
+        return completed
     }
 
-    /// Rolls back active records and verifies committed records. Snapshot and
-    /// staging evidence are never deleted by recovery.
-    @discardableResult
-    public func recoverAtStartup() throws -> [InstallationTransactionMarker] {
-        var recovered: [InstallationTransactionMarker] = []
-        for marker in try allMarkers() {
-            switch marker.phase {
-            case .prepared, .staged, .replacing:
-                recovered.append(try rollback(transactionID: marker.transactionID))
-            case .committed:
-                break
-            case .rolledBack:
-                _ = try verifiedSnapshot(for: marker)
-                try verifyRestored(snapshot: snapshot(transactionID: marker.transactionID))
+    private func retireSnapshottingTransaction(
+        _ marker: InstallationTransactionMarker
+    ) throws -> InstallationTransactionMarker {
+        for relativePath in [marker.snapshotPath, marker.stagingPath] {
+            let path = gameRoot.appending(path: relativePath)
+            guard fileManager.fileExists(atPath: path.path) else { continue }
+            try fileManager.removeItem(at: path)
+            let parent = path.deletingLastPathComponent()
+            if fileManager.fileExists(atPath: parent.path) {
+                try syncDirectory(parent)
             }
         }
-        _ = try verifyCommittedTransactions()
-        return recovered
+        var retired = marker
+        retired.phase = .rolledBack
+        try writeMarker(retired)
+        return retired
     }
 
-    public func verifyCommittedTransactions() throws -> [InstallationTransactionMarker] {
-        let committed = try allMarkers().filter { $0.phase == .committed }
-        for marker in committed {
-            try validateCommittedRecord(marker)
+    private func finishRemoval(
+        marker: InstallationTransactionMarker,
+        beforeMutating: (InstallationSnapshotEntry) throws -> Void = { _ in }
+    ) throws -> InstallationTransactionMarker {
+        if marker.transactionID == "generation-0",
+           !fileManager.fileExists(atPath: snapshotManifestURL(marker).path) {
+            try captureRemovalSnapshot(for: marker)
         }
-        let matching = committed.filter { committedContentMatches($0) }
-        guard committed.isEmpty || !matching.isEmpty else {
-            throw InstallationTransactionError.installedFileInvalid(
-                path: "committed transaction set",
-                reason: "installed content matches no retained committed record"
-            )
+        return try restoreSnapshot(marker: marker, beforeMutating: beforeMutating)
+    }
+
+    private func removeGenerationZero(
+        beforeRemoving: (InstallationSnapshotEntry) throws -> Void
+    ) throws -> InstallationTransactionMarker {
+        guard let legacy = try generationZeroMarker() else {
+            throw InstallationTransactionError.transactionNotCurrent("generation-0")
         }
-        return matching
+        var removing = legacy
+        removing.phase = .removing
+        try writeMarker(removing)
+        try captureRemovalSnapshot(for: removing)
+        return try finishRemoval(marker: removing, beforeMutating: beforeRemoving)
     }
 
     public func marker(transactionID: String) throws -> InstallationTransactionMarker {
@@ -449,6 +698,34 @@ public struct InstallationTransactionService {
             }
         }
 
+        let snapshot = InstallationSnapshot(
+            transactionID: marker.transactionID,
+            manifestSelfHash: marker.manifestSelfHash,
+            targetIdentity: marker.targetIdentity,
+            entries: entries,
+            complete: true
+        )
+        try durableWrite(try JSONEncoder.pretty.encode(snapshot), to: snapshotManifestURL(marker))
+        try syncDirectory(root)
+    }
+
+    /// Generation zero has no pre-install snapshot to restore. Its explicit
+    /// removal record therefore uses an all-absent target snapshot: removal
+    /// deletes only the verified compatibility mappings and is idempotently
+    /// resumable from the durable removing marker.
+    private func captureRemovalSnapshot(for marker: InstallationTransactionMarker) throws {
+        let root = gameRoot.appending(path: marker.snapshotPath)
+        if !fileManager.fileExists(atPath: root.path) {
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        let entries = marker.managedMappings.map { mapping in
+            InstallationSnapshotEntry(
+                gamePath: mapping.gamePath,
+                wasPresent: false,
+                mode: nil,
+                sha256: nil
+            )
+        }
         let snapshot = InstallationSnapshot(
             transactionID: marker.transactionID,
             manifestSelfHash: marker.manifestSelfHash,
@@ -573,6 +850,111 @@ public struct InstallationTransactionService {
         }
     }
 
+    /// Selects the one committed leaf in the durable transaction lineage.
+    /// Legacy markers decode as generation zero without a parent; multiple
+    /// such roots are intentionally ambiguous and fail closed.
+    private func currentCommittedMarker() throws -> InstallationTransactionMarker? {
+        let committed = try allMarkers().filter { $0.phase == .committed }
+        guard !committed.isEmpty else { return nil }
+        let byID = Dictionary(uniqueKeysWithValues: committed.map { ($0.transactionID, $0) })
+
+        for marker in committed {
+            try validateCommittedRecord(marker)
+            if let parentID = marker.parentTransactionID {
+                if parentID == "generation-0" {
+                    guard marker.generation == 1 else {
+                        throw InstallationTransactionError.corruptMarker(
+                            "generation-zero parent must have generation one"
+                        )
+                    }
+                    continue
+                }
+                guard let parent = byID[parentID],
+                      parentID != marker.transactionID,
+                      parent.generation < UInt64.max,
+                      marker.generation == parent.generation + 1
+                else {
+                    throw InstallationTransactionError.corruptMarker(
+                        "committed transaction \(marker.transactionID) has an invalid lineage parent"
+                    )
+                }
+            } else if marker.generation > 1 {
+                throw InstallationTransactionError.corruptMarker(
+                    "generation \(marker.generation) has no lineage parent"
+                )
+            }
+        }
+
+        let parentIDs = Set(committed.compactMap(\.parentTransactionID))
+        let leaves = committed.filter { !parentIDs.contains($0.transactionID) }
+        guard leaves.count == 1, let current = leaves.first else {
+            throw InstallationTransactionError.corruptMarker(
+                "committed transaction lineage is ambiguous"
+            )
+        }
+        return current
+    }
+
+    private func generationZeroMarker() throws -> InstallationTransactionMarker? {
+        let manifestURL = gameRoot.appending(path: "archive-loader/compatibility/manifest.json")
+        guard fileManager.fileExists(atPath: manifestURL.path) else { return nil }
+
+        let document: CompatibilityManifestDocument
+        do {
+            document = try CompatibilityManifestDocument(bytes: Data(contentsOf: manifestURL))
+        } catch {
+            throw InstallationTransactionError.corruptMarker(
+                "generation-zero compatibility marker is invalid: \(error)"
+            )
+        }
+
+        var mappings: [InstallationManagedMapping] = []
+        var sourceHashes: [InstallationSourceHash] = []
+        for entry in document.manifest.managedFiles {
+            try validateManagedPath(entry.gamePath)
+            let mapping = InstallationManagedMapping(
+                packagePath: entry.packagePath,
+                gamePath: entry.gamePath,
+                expectedSHA256: entry.sha256,
+                installedSHA256: nil
+            )
+            let actual: String
+            do {
+                actual = try managedHash(at: gameFileURL(entry.gamePath), mapping: mapping)
+            } catch {
+                throw InstallationTransactionError.installedFileInvalid(
+                    path: entry.gamePath,
+                    reason: "generation-zero compatibility marker is incomplete: \(error)"
+                )
+            }
+            guard actual == entry.sha256 else {
+                throw InstallationTransactionError.installedFileInvalid(
+                    path: entry.gamePath,
+                    reason: "generation-zero compatibility marker expected \(entry.sha256), found \(actual)"
+                )
+            }
+            var installed = mapping
+            installed.installedSHA256 = actual
+            mappings.append(installed)
+            sourceHashes.append(InstallationSourceHash(
+                packagePath: entry.packagePath,
+                expectedSHA256: entry.sha256,
+                actualSHA256: actual
+            ))
+        }
+
+        return InstallationTransactionMarker(
+            transactionID: "generation-0",
+            phase: .committed,
+            manifestSelfHash: document.maskedSelfHash,
+            targetIdentity: document.manifest.target,
+            sourcePackageHashes: sourceHashes,
+            snapshotPath: snapshotRelativePath("generation-0"),
+            stagingPath: stagingRelativePath("generation-0"),
+            managedMappings: mappings
+        )
+    }
+
     private func validateMarker(_ marker: InstallationTransactionMarker, expectedID: String) throws {
         guard marker.transactionID == expectedID else {
             throw InstallationTransactionError.corruptMarker("filename and transaction id disagree")
@@ -581,9 +963,16 @@ public struct InstallationTransactionService {
               marker.stagingPath == stagingRelativePath(expectedID),
               isSHA256(marker.manifestSelfHash),
               !marker.managedMappings.isEmpty,
-              marker.sourcePackageHashes.count == marker.managedMappings.count
+              marker.sourcePackageHashes.count == marker.managedMappings.count,
+              marker.generation == 0 ? marker.parentTransactionID == nil : true
         else {
             throw InstallationTransactionError.corruptMarker("paths, manifest hash, or mappings are incomplete")
+        }
+        if let parentTransactionID = marker.parentTransactionID {
+            try validateTransactionID(parentTransactionID)
+            guard parentTransactionID != marker.transactionID else {
+                throw InstallationTransactionError.corruptMarker("transaction cannot be its own lineage parent")
+            }
         }
         let sourcePaths = marker.sourcePackageHashes.map(\.packagePath)
         guard sourcePaths == marker.managedMappings.map(\.packagePath) else {
