@@ -35,7 +35,6 @@ public struct InstallationTransactionMarker: Codable, Equatable, Sendable {
     public let snapshotPath: String
     public let stagingPath: String
     public var managedMappings: [InstallationManagedMapping]
-    fileprivate let isLegacyLineage: Bool
 
     public init(
         transactionID: String,
@@ -59,7 +58,6 @@ public struct InstallationTransactionMarker: Codable, Equatable, Sendable {
         self.snapshotPath = snapshotPath
         self.stagingPath = stagingPath
         self.managedMappings = managedMappings
-        self.isLegacyLineage = false
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -77,8 +75,6 @@ public struct InstallationTransactionMarker: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let hasGeneration = container.contains(.generation)
-        let hasParentTransactionID = container.contains(.parentTransactionID)
         transactionID = try container.decode(String.self, forKey: .transactionID)
         phase = try container.decode(InstallationTransactionPhase.self, forKey: .phase)
         generation = try container.decodeIfPresent(UInt64.self, forKey: .generation) ?? 0
@@ -89,17 +85,14 @@ public struct InstallationTransactionMarker: Codable, Equatable, Sendable {
         snapshotPath = try container.decode(String.self, forKey: .snapshotPath)
         stagingPath = try container.decode(String.self, forKey: .stagingPath)
         managedMappings = try container.decode([InstallationManagedMapping].self, forKey: .managedMappings)
-        isLegacyLineage = !hasGeneration && !hasParentTransactionID
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(transactionID, forKey: .transactionID)
         try container.encode(phase, forKey: .phase)
-        if !isLegacyLineage {
-            try container.encode(generation, forKey: .generation)
-            try container.encodeIfPresent(parentTransactionID, forKey: .parentTransactionID)
-        }
+        try container.encode(generation, forKey: .generation)
+        try container.encodeIfPresent(parentTransactionID, forKey: .parentTransactionID)
         try container.encode(manifestSelfHash, forKey: .manifestSelfHash)
         try container.encode(targetIdentity, forKey: .targetIdentity)
         try container.encode(sourcePackageHashes, forKey: .sourcePackageHashes)
@@ -894,24 +887,9 @@ public struct InstallationTransactionService {
 
         let parentIDs = Set(committed.compactMap(\.parentTransactionID))
         let leaves = committed.filter { !parentIDs.contains($0.transactionID) }
-        if leaves.count == 1, let current = leaves.first {
-            return current
-        }
-
-        guard leaves.allSatisfy({ $0.isLegacyLineage }) else {
+        guard leaves.count == 1, let current = leaves.first else {
             throw InstallationTransactionError.corruptMarker(
-                "committed transaction lineage is ambiguous: multiple non-legacy leaves"
-            )
-        }
-
-        let matchingLeaves = leaves.filter { committedContentMatches($0) }
-        guard matchingLeaves.count == 1, let current = matchingLeaves.first else {
-            let matchingIDs = matchingLeaves.map(\.transactionID).joined(separator: ", ")
-            let matchDescription = matchingLeaves.isEmpty
-                ? "no leaf matches live content"
-                : "multiple leaves match live content: \(matchingIDs)"
-            throw InstallationTransactionError.corruptMarker(
-                "committed transaction lineage is ambiguous: \(matchDescription)"
+                "committed transaction lineage is ambiguous"
             )
         }
         return current
