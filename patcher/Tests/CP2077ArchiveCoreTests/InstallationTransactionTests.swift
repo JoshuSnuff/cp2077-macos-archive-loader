@@ -487,6 +487,196 @@ struct InstallationTransactionTests {
         #expect(try fixture.service.marker(transactionID: second.transactionID).phase == .rolledBack)
     }
 
+    @Test func legacyIndependentCommittedMarkersSelectTheUniqueLiveContentMatch() throws {
+        let fixture = try TransactionFixture()
+        defer { fixture.cleanUp() }
+
+        let first = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "legacy runtime v1"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-v1"
+        )
+        let second = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "legacy runtime v2"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-v2"
+        )
+        try fixture.writeLegacyMarker(first)
+        try fixture.writeLegacyMarker(second)
+
+        #expect(try fixture.service.inspect().current?.transactionID == second.transactionID)
+        #expect(try fixture.service.verifyCommittedTransactions().map(\.transactionID) == [second.transactionID])
+    }
+
+    @Test func legacyIndependentCommittedMarkersRemainAmbiguousWhenLiveContentMatchesBoth() throws {
+        let fixture = try TransactionFixture()
+        defer { fixture.cleanUp() }
+        let document = try fixture.frameworkDocument(runtime: "identical legacy runtime")
+
+        let first = try fixture.service.install(
+            manifestDocument: document,
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-a"
+        )
+        let second = try fixture.service.install(
+            manifestDocument: document,
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-b"
+        )
+        try fixture.writeLegacyMarker(first)
+        try fixture.writeLegacyMarker(second)
+
+        do {
+            _ = try fixture.service.inspect()
+            Issue.record("expected ambiguous legacy committed markers to fail closed")
+        } catch let error as InstallationTransactionError {
+            guard case let .corruptMarker(reason) = error else {
+                Issue.record("expected corruptMarker, got \(error)")
+                return
+            }
+            #expect(reason.contains("ambiguous"))
+        }
+    }
+
+    @Test func modernForkedCommittedMarkersRemainAmbiguousEvenWhenOneMatchesLiveContent() throws {
+        let fixture = try TransactionFixture()
+        defer { fixture.cleanUp() }
+
+        let root = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "fork root runtime"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "fork-root"
+        )
+        let firstBranch = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "first branch runtime"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "fork-a"
+        )
+        let secondBranch = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "second branch runtime"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "fork-b"
+        )
+        let forkedBranch = InstallationTransactionMarker(
+            transactionID: secondBranch.transactionID,
+            phase: secondBranch.phase,
+            manifestSelfHash: secondBranch.manifestSelfHash,
+            targetIdentity: secondBranch.targetIdentity,
+            sourcePackageHashes: secondBranch.sourcePackageHashes,
+            snapshotPath: secondBranch.snapshotPath,
+            stagingPath: secondBranch.stagingPath,
+            managedMappings: secondBranch.managedMappings,
+            generation: firstBranch.generation,
+            parentTransactionID: root.transactionID
+        )
+        try fixture.writeMarker(forkedBranch)
+
+        do {
+            _ = try fixture.service.inspect()
+            Issue.record("expected modern forked committed markers to fail closed")
+        } catch let error as InstallationTransactionError {
+            guard case let .corruptMarker(reason) = error else {
+                Issue.record("expected corruptMarker, got \(error)")
+                return
+            }
+            #expect(reason.contains("ambiguous"))
+        }
+    }
+
+    @Test func explicitlyEncodedGenerationZeroMarkersRemainAmbiguousWhenOneMatchesLiveContent() throws {
+        let fixture = try TransactionFixture()
+        defer { fixture.cleanUp() }
+
+        let first = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "explicit generation zero v1"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "explicit-zero-v1"
+        )
+        let second = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "explicit generation zero v2"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "explicit-zero-v2"
+        )
+        try fixture.writeMarker(InstallationTransactionMarker(
+            transactionID: first.transactionID,
+            phase: first.phase,
+            manifestSelfHash: first.manifestSelfHash,
+            targetIdentity: first.targetIdentity,
+            sourcePackageHashes: first.sourcePackageHashes,
+            snapshotPath: first.snapshotPath,
+            stagingPath: first.stagingPath,
+            managedMappings: first.managedMappings,
+            generation: 0
+        ))
+        try fixture.writeMarker(InstallationTransactionMarker(
+            transactionID: second.transactionID,
+            phase: second.phase,
+            manifestSelfHash: second.manifestSelfHash,
+            targetIdentity: second.targetIdentity,
+            sourcePackageHashes: second.sourcePackageHashes,
+            snapshotPath: second.snapshotPath,
+            stagingPath: second.stagingPath,
+            managedMappings: second.managedMappings,
+            generation: 0
+        ))
+
+        do {
+            _ = try fixture.service.inspect()
+            Issue.record("expected explicitly encoded generation-zero markers to fail closed")
+        } catch let error as InstallationTransactionError {
+            guard case let .corruptMarker(reason) = error else {
+                Issue.record("expected corruptMarker, got \(error)")
+                return
+            }
+            #expect(reason.contains("ambiguous"))
+        }
+    }
+
+    @Test func legacyIndependentCommittedMarkersFailClosedWhenNoLeafMatchesLiveContent() throws {
+        let fixture = try TransactionFixture()
+        defer { fixture.cleanUp() }
+
+        let first = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "legacy runtime v1"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-no-match-v1"
+        )
+        let second = try fixture.service.install(
+            manifestDocument: try fixture.frameworkDocument(runtime: "legacy runtime v2"),
+            packageRoot: fixture.packageRoot,
+            verifiedIdentity: fixture.identity,
+            transactionID: "legacy-no-match-v2"
+        )
+        try fixture.writeLegacyMarker(first)
+        try fixture.writeLegacyMarker(second)
+        try fixture.writeGameFile(
+            "red4ext/RED4ext.dylib",
+            bytes: "unrecorded live runtime",
+            mode: 0o755
+        )
+
+        do {
+            _ = try fixture.service.inspect()
+            Issue.record("expected legacy markers with no live-content match to fail closed")
+        } catch let error as InstallationTransactionError {
+            guard case let .corruptMarker(reason) = error else {
+                Issue.record("expected corruptMarker, got \(error)")
+                return
+            }
+            #expect(reason.contains("no leaf matches live content"))
+        }
+    }
+
     @Test func generationZeroHasAnExplicitSafeRemovalPath() throws {
         let fixture = try TransactionFixture()
         defer { fixture.cleanUp() }
@@ -785,6 +975,18 @@ private struct TransactionFixture {
 
     func writeMarker(_ marker: InstallationTransactionMarker) throws {
         let data = try JSONEncoder().encode(marker)
+        try data.write(to: service.markerURL(transactionID: marker.transactionID), options: .atomic)
+    }
+
+    func writeLegacyMarker(_ marker: InstallationTransactionMarker) throws {
+        guard var object = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(marker)
+        ) as? [String: Any] else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        object.removeValue(forKey: "generation")
+        object.removeValue(forKey: "parentTransactionID")
+        let data = try JSONSerialization.data(withJSONObject: object)
         try data.write(to: service.markerURL(transactionID: marker.transactionID), options: .atomic)
     }
 }
