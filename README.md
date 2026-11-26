@@ -9,9 +9,8 @@ after a session.
 
 - Version 0.1.3
 - Apple Silicon Macs only
-- PC `.archive` mods, plus optional native framework resources
-- Offline TweakDB edits for existing flats and arrays
-- Optional native TweakXL and ArchiveXL support through a verified compatibility package
+- PC `.archive` mods only
+- Offline TweakDB edits for existing flats and arrays; ArchiveXL-dependent mods are rejected
 
 ## Install
 
@@ -32,66 +31,6 @@ Setup records a baseline copy of your official archives and prints the exact
 command to launch with. It refuses to continue if it finds signs that something
 has already modified your archives.
 
-### Optional native TweakXL and ArchiveXL runtime
-
-The loader does not download third-party runtime files. To use real TweakXL or
-ArchiveXL mods, prepare a directory that extends the compatibility package for
-your exact supported game build:
-
-```
-runtime-package/
-└── archive-loader/
-    ├── compatibility/manifest.json
-    └── red4ext/
-        ├── RED4ext.dylib
-        └── plugins/
-            ├── TweakXL.dylib
-            └── ArchiveXL.dylib
-```
-
-The manifest must use `cp2077-compatibility/v1`, pin the game, distribution,
-platform, arm64 architecture, marketing version, bundle version, GOG build ID,
-and executable UUID/hash, and list every package file in its self-hashed
-`managedFiles` inventory. A native runtime manifest also contains this exact
-capability declaration:
-
-```json
-{
-  "schema": "archive-loader-framework-runtime/v1",
-  "roles": ["red4ext-loader", "tweakxl-plugin", "archivexl-plugin"],
-  "environment": {
-    "DYLD_INSERT_LIBRARIES": {
-      "mode": "prepend",
-      "paths": ["red4ext/RED4ext.dylib"]
-    },
-    "DYLD_FORCE_FLAT_NAMESPACE": { "mode": "replace", "value": "1" }
-  }
-}
-```
-
-Every required dylib must be a regular executable arm64 Mach-O file, pass
-`codesign --verify --deep --strict`, have a lowercase SHA-256 recorded in the
-manifest, and have no quarantine attribute. Do not copy runtime files directly
-into the game or rely on an implicit ad-hoc resign. An identity, hash, signing,
-architecture, or package-layout failure is reported before setup writes a
-baseline or installs anything; a requested runtime never silently falls back to
-offline behavior.
-
-On the first setup, install the package and capture the archive/TweakDB
-baseline together:
-
-```bash
-./archive-loader/bin/archive-loader setup \
-  --runtime-package "/path/to/runtime-package" \
-  --game "/path/to/Cyberpunk 2077" \
-  --assume-clean
-```
-
-On an installation that already has a baseline, `setup --runtime-package PATH`
-installs or upgrades the permanent runtime without replacing that baseline.
-Add `--rebaseline` only when the official game files have been verified again
-and the baseline should be replaced.
-
 ## Add mods
 
 Drop `.archive` files into:
@@ -105,28 +44,17 @@ when two mods change the same thing the first one wins — the other is reported
 at launch, not silently applied.
 
 TweakDB mods (`.yaml`, `.yml`, or `.tweak`) go under
-`archive-loader/mods/tweaks/`. The supported offline subset assigns existing
-flats and appends/removes array values. Use `base` or `ep1` selectors when an
-operation must target one blob, or build and verify offline:
+`archive-loader/mods/tweaks/`. The supported subset assigns existing flats and
+appends/removes array values. Use `base` or `ep1` selectors when an operation
+must target one blob, or build and verify offline:
 
 ```bash
 ./archive-loader/bin/archive-loader tweaks build --game "/path/to/Cyberpunk 2077"
 ```
 
-For native framework mods, the loader recognizes only exact root-level
-`requires` or `dependencies` entries containing `TweakXL` or `ArchiveXL`.
-
-- Runtime-owned `.yaml`, `.yml`, and `.tweak` documents are copied for the
-  session into the native TweakXL discovery path, `r6/tweaks/`.
-- ArchiveXL `.xl` payloads, and `.archive` payloads with an exact ArchiveXL
-  sidecar declaration, are copied for the session into `archive/Mac/mod/`.
-- Runtime-owned documents are not sent through the offline TweakDB builder.
-  Documents without an exact dependency marker keep their offline behavior;
-  ordinary `.archive` mods keep the loader's archive-patching behavior.
-
-The projected files use loader-owned names and are removed by `restore` after
-the game exits. Do not copy framework mods manually into the native paths.
-Native framework mods require an active verified runtime package.
+ArchiveXL resource registration and runtime APIs are not supported. Exact
+ArchiveXL dependency markers fail before any game data is written; remove that
+mod or use a future ArchiveXL-capable runtime.
 
 ## Launch
 
@@ -162,36 +90,6 @@ for the duration of a run.
 
 Use `run --no-tweaks` for archive-only launches.
 
-`--no-tweaks` skips the offline TweakDB build; it does not disable a verified
-native runtime or its session projections.
-
-## Permanent and session state
-
-The compatibility package is permanent installation state. Its RED4ext,
-TweakXL, and ArchiveXL files are installed under their native game-root paths,
-owned by one transactional compatibility record under `archive-loader/state/`,
-and remain installed across `run` and `restore`. A later package can upgrade or
-downgrade that same transaction safely.
-
-Archives, offline TweakDB blobs, and native framework projections are session
-state. `run` restores any previous interrupted session, applies the requested
-changes, launches your unchanged command, and removes the projections on exit.
-If a crash or SIGKILL leaves session data behind, run `restore` before playing
-again. `status` reports the permanent runtime independently from the live
-archive/TweakDB state.
-
-Remove only the permanent runtime with:
-
-```bash
-./archive-loader/bin/archive-loader runtime remove \
-  --game "/path/to/Cyberpunk 2077"
-```
-
-The game must not be running. This command restores the transaction snapshot and
-removes only files owned by the installed compatibility package; unrelated files
-in `red4ext/` are preserved. It does not restore archives, delete TweakDB
-changes, or remove a session projection. Use `restore` for session cleanup.
-
 ## If something goes wrong
 
 If the game or your Mac crashes mid-session, the archives are left patched.
@@ -200,9 +98,6 @@ Put them back with:
 ```bash
 ./archive-loader/bin/archive-loader restore
 ```
-
-`restore` keeps an installed native runtime. To remove that permanent runtime,
-use `runtime remove` as described above.
 
 To check the state of your install at any time:
 

@@ -205,31 +205,6 @@ enum RunCommand {
             consequence: "restoring now would rewrite archives underneath it"
         )
 
-        // Reconcile any projection left by an interrupted prior session while
-        // this command still owns the installation lock. This is deliberately
-        // throwing: a tampered record or destination must block the run.
-        try FrameworkModProjection.reconcile(game: game)
-
-        // Reconcile compatibility transactions before reading the active
-        // runtime. This is recovery work, not a new installation mutation.
-        _ = try game.installationTransactionService.recoverAtStartup()
-
-        let requirements = try ModFrameworkRequirements.classify(game: game)
-        let activeRuntime = try FrameworkRuntimeSupport.active(
-            game: game,
-            requireFramework: !requirements.runtimeOwnedMods.isEmpty
-        )
-
-        // Every read-only gate must finish before restore, patching, TweakDB
-        // delivery, or native framework projection begins.
-        try SetupCommand.runPreflight(game: game, log: log)
-        guard FileManager.default.isExecutableFile(atPath: launcher.path) else {
-            throw LaunchError.notExecutable(launcher)
-        }
-        let launchEnvironment = try activeRuntime.map {
-            try FrameworkRuntimeSupport.environment(for: $0.runtime, game: game)
-        }
-
         // Compatibility is the authority for whether this installation may
         // be touched at all. Keep this before baseline restoration, patching,
         // watcher setup, and every path to LaunchSupervisor.run.
@@ -237,10 +212,15 @@ enum RunCommand {
             let manifestURL = game.root.appending(
                 path: "archive-loader/compatibility/manifest.json"
             )
-            guard FileManager.default.isReadableFile(atPath: manifestURL.path) else { return }
             let compatibilityManifest = try CompatibilityManifest.load(from: manifestURL)
-            let identity = try CompatibilityIdentityReader.read(root: game.root, manifest: compatibilityManifest)
-            try CompatibilityIdentityValidator.requireMatch(target: compatibilityManifest.target, actual: identity)
+            let identity = try CompatibilityIdentityReader.read(
+                root: game.root,
+                manifest: compatibilityManifest
+            )
+            try CompatibilityIdentityValidator.requireMatch(
+                target: compatibilityManifest.target,
+                actual: identity
+            )
         }
 
         guard let manifest = try store.publishedManifest() else {
@@ -268,7 +248,7 @@ enum RunCommand {
             stagedTweaks = nil
             log.info("Tweaks skipped (--no-tweaks)")
         } else {
-            tweakMods = requirements.offlineMods
+            tweakMods = try TweakModCollection.mods(game: game)
             if tweakMods.isEmpty {
                 stagedTweaks = nil
                 if manifest.tweaks.isEmpty {
@@ -284,7 +264,6 @@ enum RunCommand {
                 guard let result = try buildTweaks(
                     game: game,
                     useCache: useCache,
-                    requirements: requirements,
                     log: { message in log.warning(message) }
                 ) else {
                     throw TweakBuildError.noTweakMods
@@ -310,10 +289,7 @@ enum RunCommand {
         }
 
         // 2. Patch, unless there is nothing to patch.
-        let runtimeOwnedMods = Set(requirements.runtimeOwnedMods.map(\.standardizedFileURL))
-        let mods = try ModCollection.enabledMods(game: game).filter {
-            !runtimeOwnedMods.contains($0.standardizedFileURL)
-        }
+        let mods = try ModCollection.enabledMods(game: game)
         var patchedArchives: Set<URL> = []
         var allowTweakDelivery = true
         if mods.isEmpty {
@@ -341,7 +317,6 @@ enum RunCommand {
                 } catch {
                     reportTimingsIfNeeded(log: log, alreadyReported: &timingSummaryReported)
                     reportRestoreFailure(error, game: game, log: log)
-                    try FrameworkModProjection.restore(game: game)
                     exitAfterReporting(
                         restoreFailureExitCode,
                         log: log,
@@ -421,17 +396,6 @@ enum RunCommand {
             }
         }
 
-        // Native framework files are session-scoped. Stage them after every
-        // operation that can restore the baseline, so no later retry can
-        // silently remove the files before the launcher starts.
-        let projection: FrameworkModProjection?
-        if !requirements.runtimeOwnedMods.isEmpty {
-            projection = try FrameworkModProjection.stage(requirements: requirements, game: game)
-            log.info("Projected \(projection?.entries.count ?? 0) framework file(s) for this session")
-        } else {
-            projection = nil
-        }
-
         // 4. Launch, then restore on every path out.
         var outcome: LaunchOutcome
 
@@ -457,14 +421,10 @@ enum RunCommand {
         defer { signalForwarder.stop() }
 
         do {
-            if let projection {
-                try assertProjectionPresentForLaunch(projection)
-            }
             outcome = try LaunchSupervisor.run(
                 executable: launcher,
                 arguments: launcherArguments,
                 workingDirectory: game.root,
-                environment: launchEnvironment,
                 onStarted: { launcherTarget.value = $0 },
                 signalForwarder: signalForwarder
             )
@@ -513,39 +473,14 @@ enum RunCommand {
         }
     }
 
-    private static func assertProjectionPresentForLaunch(
-        _ projection: FrameworkModProjection
-    ) throws {
-        for entry in projection.entries {
-            let values = try entry.destination.resourceValues(
-                forKeys: [.isSymbolicLinkKey, .isRegularFileKey]
-            )
-            guard FileManager.default.fileExists(atPath: entry.destination.path),
-                  values.isSymbolicLink != true,
-                  values.isRegularFile == true
-            else {
-                throw CLIError.usage(
-                    "framework projection is missing before launch: \(entry.destination.path)"
-                )
-            }
-            guard try Hashes.sha256Hex(ofFileAt: entry.destination) == entry.sha256 else {
-                throw CLIError.usage(
-                    "framework projection changed before launch: \(entry.destination.path)"
-                )
-            }
-        }
-    }
-
     /// Builds from the published generation into the loader-owned tweak cache.
     /// It never reads a live blob as a source and never writes into r6/cache.
     static func buildTweaks(
         game: GameInstall,
         useCache: Bool,
-        requirements: ModFrameworkRequirements? = nil,
         log: (String) -> Void = { print("warning: \($0)") }
     ) throws -> TweakBuildResult? {
-        let requirements = try requirements ?? ModFrameworkRequirements.classify(game: game)
-        let mods = requirements.offlineMods
+        let mods = try TweakModCollection.mods(game: game)
         guard !mods.isEmpty else { return nil }
 
         let store = BaselineStore(game: game)
@@ -563,19 +498,12 @@ enum RunCommand {
         }
 
         let sources = try tweakSources(game: game, manifest: manifest, store: store)
-        let plan = try TweakPlanner.plan(
-            mods: mods,
-            blobs: sources,
-            requirements: requirements
-        )
-        let runtimeProjectionInputs = try runtimeProjectionInputs(for: requirements)
+        let plan = try TweakPlanner.plan(mods: mods, blobs: sources)
         let fingerprint = try TweakFingerprint.compute(
             game: game,
             manifest: manifest,
             mods: mods,
-            inventory: inventory,
-            requirements: requirements,
-            runtimeProjectionInputs: runtimeProjectionInputs
+            inventory: inventory
         )
         let cache = TweakCacheStore(game: game)
 
@@ -669,20 +597,6 @@ enum RunCommand {
             try? FileManager.default.removeItem(at: staging)
             throw error
         }
-    }
-
-    static func runtimeProjectionInputs(
-        for requirements: ModFrameworkRequirements
-    ) throws -> [String] {
-        try requirements.classifications
-            .filter(\.isRuntimeOwned)
-            .flatMap { classification in
-                [classification.mod] + classification.associatedFiles
-            }
-            .sorted { utf8Precedes($0.path, $1.path) }
-            .map { source in
-                source.path + " " + (try Hashes.sha256Hex(ofFileAt: source))
-            }
     }
 
     static func deliverTweaks(
@@ -1138,10 +1052,6 @@ enum RunCommand {
     }
 
     static func restore(store: BaselineStore, ledger: ArtifactLedger) throws {
-        // Projection files are session state. Cleanup is explicit and
-        // throwing: a stale record, changed destination, or failed deletion
-        // must not be hidden while the archives are reported as restored.
-        try FrameworkModProjection.restore(game: store.game)
         _ = try store.restore()
         try ledger.removeRecorded()
 

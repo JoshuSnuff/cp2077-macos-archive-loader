@@ -30,7 +30,7 @@ private func archiveXLFixture() throws -> (root: URL, game: GameInstall, mods: U
     })
 }
 
-@Test func installedPluginNamesDoNotCreateFrameworkRequirements() throws {
+@Test func exactPluginMarkersMatchOnlyTheV1Paths() throws {
     let fixture = try archiveXLFixture()
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     let plugins = fixture.game.root.appending(path: "red4ext/plugins", directoryHint: .isDirectory)
@@ -40,7 +40,13 @@ private func archiveXLFixture() throws -> (root: URL, game: GameInstall, mods: U
 
     let inventory = try ArchiveXLDetector.scan(game: fixture.game)
 
-    #expect(inventory.matches.isEmpty)
+    #expect(inventory.matches.map(\.path).sorted() == [
+        fixture.game.root.appending(path: "red4ext/plugins/ArchiveXL").normalizedFileURL.path,
+        fixture.game.root.appending(path: "red4ext/plugins/ArchiveXL.dylib").normalizedFileURL.path,
+    ])
+    #expect(inventory.diagnostics.allSatisfy {
+        $0.contains("archive-loader-archivexl-markers/v1")
+    })
 }
 
 @Test func ordinaryArchivesUnknownMetadataAndUnrelatedPluginsAreIgnored() throws {

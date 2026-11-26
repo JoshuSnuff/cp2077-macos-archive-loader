@@ -10,13 +10,8 @@ enum SetupCommand {
         let assumeClean = args.contains("--assume-clean")
         let rebaseline = args.contains("--rebaseline")
         let trustLiveTweaks = args.contains("--trust-live-tweaks")
-        let runtimePackagePath = options.value("--runtime-package")
         let debug = args.contains("--debug")
             || ProcessInfo.processInfo.environment["ARCHIVE_LOADER_DEBUG"] == "1"
-
-        if args.contains("--runtime-package") && runtimePackagePath == nil {
-            throw CLIError.missingValue("--runtime-package")
-        }
 
         guard !trustLiveTweaks || rebaseline else {
             throw CLIError.usage("--trust-live-tweaks requires --rebaseline")
@@ -44,9 +39,6 @@ enum SetupCommand {
                 assumeClean: assumeClean,
                 rebaseline: rebaseline,
                 trustLiveTweaks: trustLiveTweaks,
-                runtimePackageRoot: runtimePackagePath.map {
-                    URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL
-                },
                 log: log
             )
         }
@@ -59,7 +51,6 @@ enum SetupCommand {
         assumeClean: Bool,
         rebaseline: Bool,
         trustLiveTweaks: Bool,
-        runtimePackageRoot: URL?,
         log: SessionLog
     ) throws {
 
@@ -74,42 +65,24 @@ enum SetupCommand {
         // The game can start while the lock is being acquired.
         try GameRunningGuard.refuseIfRunning(game: game, consequence: setupConsequence)
 
-        // Recover an interrupted compatibility transaction before inspecting
-        // capabilities or considering a new package. Recovery is the only
-        // mutation allowed before the preflight gates below.
-        _ = try game.installationTransactionService.recoverAtStartup()
-
-        let requirements = try ModFrameworkRequirements.classify(game: game)
-        let activeRuntime = try FrameworkRuntimeSupport.active(game: game)
-        let package = try prepareRuntimePackage(
-            game: game,
-            packageRoot: runtimePackageRoot,
-            activeRuntime: activeRuntime
-        )
-
-        if !requirements.runtimeOwnedMods.isEmpty,
-           package?.document.manifest.frameworkRuntime == nil,
-           activeRuntime == nil {
+        // A setup/rebaseline must not publish a generation while the install
+        // advertises a runtime capability this loader cannot provide.
+        let tweakMods = try TweakModCollection.mods(game: game)
+        let archiveXL = try ArchiveXLDetector.scan(mods: tweakMods, game: game)
+        guard archiveXL.isEmpty else {
             throw CLIError.usage(
-                "framework-dependent mods were found, but no verified compatibility runtime is active."
-                    + " Install one with setup --runtime-package PATH"
+                "ArchiveXL is unsupported by this loader; nothing was changed:\n"
+                    + archiveXL.diagnostics.map { diagnostic in "  " + diagnostic }.joined(separator: "\n")
             )
         }
+
+        try installCompatibilityPackageIfPresent(game: game, log: log)
 
         log.info("Game     \(game.root.path)")
         log.info("Version  \(candidate.version)  (\(candidate.sources.joined(separator: "+")))")
         log.info()
 
-        // This must precede baseline restore/capture and any package write.
         try runPreflight(game: game, log: log)
-
-        if let package {
-            try installCompatibilityPackage(
-                package: package,
-                game: game,
-                log: log
-            )
-        }
 
         if rebaseline {
             try Rebaseline.run(
@@ -136,80 +109,26 @@ enum SetupCommand {
         printLaunchCommand(game: game, log: log)
     }
 
-    private struct RuntimePackage {
-        let root: URL
-        let document: CompatibilityManifestDocument
-        let identity: CompatibilityIdentity
-    }
-
-    /// Validate a requested package without mutating the game. The source root
-    /// is the package directory itself, matching the existing compatibility
-    /// package layout; an installed manifest is only used as a legacy package
-    /// source when no explicit package was requested.
-    private static func prepareRuntimePackage(
-        game: GameInstall,
-        packageRoot: URL?,
-        activeRuntime: ActiveFrameworkRuntime?
-    ) throws -> RuntimePackage? {
-        let root: URL?
-        if let packageRoot {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(
-                atPath: packageRoot.path,
-                isDirectory: &isDirectory
-            ), isDirectory.boolValue else {
-                throw CLIError.usage("runtime package is not a directory: \(packageRoot.path)")
-            }
-            root = packageRoot
-        } else if activeRuntime == nil {
-            let installedManifest = game.compatibilityManifestURL
-            root = FileManager.default.isReadableFile(atPath: installedManifest.path)
-                ? game.root
-                : nil
-        } else {
-            root = nil
-        }
-
-        guard let root else { return nil }
-        let manifestURL = root.appending(path: "archive-loader/compatibility/manifest.json")
-        guard FileManager.default.isReadableFile(atPath: manifestURL.path) else {
-            throw CLIError.usage(
-                "runtime package is missing archive-loader/compatibility/manifest.json: \(root.path)"
-            )
-        }
-        let document = try CompatibilityManifestDocument(bytes: Data(contentsOf: manifestURL))
-        guard document.manifest.frameworkRuntime != nil else {
-            if packageRoot != nil {
-                throw CLIError.usage(
-                    "requested runtime package does not declare frameworkRuntime; refusing to fall back"
-                )
-            }
-            let identity = try CompatibilityIdentityReader.read(root: game.root, manifest: document.manifest)
-            try CompatibilityIdentityValidator.requireMatch(target: document.manifest.target, actual: identity)
-            _ = try CompatibilityPackageValidator.validate(
-                manifest: document.manifest,
-                packageRoot: root
-            )
-            return RuntimePackage(root: root, document: document, identity: identity)
-        }
-        let identity = try CompatibilityIdentityReader.read(root: game.root, manifest: document.manifest)
-        try CompatibilityIdentityValidator.requireMatch(target: document.manifest.target, actual: identity)
-        _ = try CompatibilityPackageValidator.validate(
-            manifest: document.manifest,
-            packageRoot: root
-        )
-        return RuntimePackage(root: root, document: document, identity: identity)
-    }
-
-    private static func installCompatibilityPackage(
-        package: RuntimePackage,
+    /// The zip is extracted at the game root, so its zip-root package paths
+    /// are also the source root for the transactional installer. Keep this
+    /// before baseline capture: a release with a bad native payload must not
+    /// leave a half-installed runtime behind.
+    private static func installCompatibilityPackageIfPresent(
         game: GameInstall,
         log: SessionLog
     ) throws {
-        let marker = try game.installationTransactionService.install(
-            manifestDocument: package.document,
-            packageRoot: package.root,
-            verifiedIdentity: package.identity
+        let manifestURL = game.root.appending(path: "archive-loader/compatibility/manifest.json")
+        guard FileManager.default.isReadableFile(atPath: manifestURL.path) else {
+            return
+        }
+        let document = try CompatibilityManifestDocument(bytes: Data(contentsOf: manifestURL))
+        let identity = try CompatibilityIdentityReader.read(root: game.root, manifest: document.manifest)
+        try CompatibilityIdentityValidator.requireMatch(target: document.manifest.target, actual: identity)
+        let service = InstallationTransactionService(gameRoot: game.root)
+        let marker = try service.install(
+            manifestDocument: document,
+            packageRoot: game.root,
+            verifiedIdentity: identity
         )
         log.info("Compatibility package installed transactionally (\(marker.transactionID))")
     }

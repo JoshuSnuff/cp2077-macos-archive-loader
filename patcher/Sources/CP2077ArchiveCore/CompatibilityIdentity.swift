@@ -26,14 +26,12 @@ public struct CompatibilityIdentity: Equatable, Sendable {
 }
 
 public enum CompatibilityIdentityReader {
-    public typealias CommandRunner = CompatibilityPreflight.CommandRunner
-    public typealias QuarantineChecker = CompatibilityPreflight.QuarantineChecker
+    public typealias CommandRunner = (_ command: String, _ arguments: [String]) throws -> String
 
     public static func read(
         root: URL,
         manifest: CompatibilityManifest,
-        commandRunner: CommandRunner? = nil,
-        quarantineChecker: QuarantineChecker? = nil
+        commandRunner: CommandRunner? = nil
     ) throws -> CompatibilityIdentity {
         try manifest.validate(allowMaskedSelfHash: true)
         let sources = manifest.metadataSources
@@ -50,24 +48,7 @@ public enum CompatibilityIdentityReader {
         guard FileManager.default.isReadableFile(atPath: executableURL.path) else {
             throw CompatibilityManifestError.missingMetadata(sources.architecture.path)
         }
-        let run = commandRunner ?? CompatibilityPreflight.run
-        let isQuarantined = quarantineChecker ?? CompatibilityPreflight.hasQuarantine
-        if manifest.frameworkRuntime != nil {
-            do {
-                _ = try run("codesign", ["--verify", "--deep", "--strict", executableURL.path])
-            } catch {
-                throw CompatibilityManifestError.codeSigningFailed(executableURL.path)
-            }
-            do {
-                if try isQuarantined(executableURL) {
-                    throw CompatibilityManifestError.quarantinedSource(executableURL.path)
-                }
-            } catch let error as CompatibilityManifestError {
-                throw error
-            } catch {
-                throw CompatibilityManifestError.quarantineCheckFailed(executableURL.path)
-            }
-        }
+        let run = commandRunner ?? defaultCommandRunner
         let architectureOutput = try run("lipo", ["-archs", executableURL.path])
         let architecture = architectureOutput.split { $0 == " " || $0 == "\n" || $0 == "\t" }
             .map(String.init)
@@ -91,6 +72,25 @@ public enum CompatibilityIdentityReader {
         )
     }
 
+    private static func defaultCommandRunner(_ command: String, _ arguments: [String]) throws -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + arguments
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+        } catch {
+            throw CompatibilityManifestError.commandFailed(command)
+        }
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            throw CompatibilityManifestError.commandFailed(command)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
 }
 
 public enum CompatibilityIdentityValidator {

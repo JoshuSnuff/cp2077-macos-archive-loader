@@ -72,23 +72,6 @@ private struct ScriptFixture {
     #expect(outcome.exitCode == 0)
 }
 
-@Test func argumentBoundariesArePreservedForValuesBeginningWithDashes() throws {
-    let fixture = try ScriptFixture()
-    defer { fixture.cleanUp() }
-    let script = try fixture.write(
-        "argv.sh",
-        #"[ "$1" = "--" ] && [ "$2" = "two words" ] && exit 0; exit 9"#
-    )
-
-    let outcome = try LaunchSupervisor.run(
-        executable: script,
-        arguments: ["--", "two words"],
-        workingDirectory: fixture.directory
-    )
-
-    #expect(outcome.exitCode == 0)
-}
-
 @Test func theEnvironmentIsPassedThroughUntouched() throws {
     let fixture = try ScriptFixture()
     defer { fixture.cleanUp() }
@@ -146,24 +129,6 @@ private struct ScriptFixture {
     #expect(throws: LaunchError.self) {
         _ = try LaunchSupervisor.run(
             executable: fixture.directory.appending(path: "absent.sh"),
-            arguments: [],
-            workingDirectory: fixture.directory
-        )
-    }
-}
-
-@Test func aNonExecutableLauncherIsRefusedBeforeAnythingStarts() throws {
-    let fixture = try ScriptFixture()
-    defer { fixture.cleanUp() }
-    let script = try fixture.write("not-executable.sh", "exit 0")
-    try FileManager.default.setAttributes(
-        [.posixPermissions: NSNumber(value: Int16(0o644))],
-        ofItemAtPath: script.path
-    )
-
-    #expect(throws: LaunchError.self) {
-        _ = try LaunchSupervisor.run(
-            executable: script,
             arguments: [],
             workingDirectory: fixture.directory
         )

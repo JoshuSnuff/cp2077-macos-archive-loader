@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
 
 public enum CompatibilityManifestError: Error, CustomStringConvertible {
     case invalidJSON
@@ -20,15 +17,6 @@ public enum CompatibilityManifestError: Error, CustomStringConvertible {
     case sourceMissing(String)
     case sourceHashMismatch(path: String, expected: String, actual: String)
     case unsafeSourcePath(String)
-    case invalidRuntimeRole(String)
-    case invalidRuntimeEnvironment(String)
-    case sourceIsSymlink(String)
-    case sourceNotRegularFile(String)
-    case sourceNotExecutable(String)
-    case invalidMachO(String)
-    case codeSigningFailed(String)
-    case quarantinedSource(String)
-    case quarantineCheckFailed(String)
 
     public var description: String {
         switch self {
@@ -64,24 +52,6 @@ public enum CompatibilityManifestError: Error, CustomStringConvertible {
             return "managed package source hash mismatch for \(path): expected \(expected), found \(actual)"
         case let .unsafeSourcePath(path):
             return "managed package source escapes its root: \(path)"
-        case let .invalidRuntimeRole(role):
-            return "invalid framework runtime role mapping: \(role)"
-        case let .invalidRuntimeEnvironment(key):
-            return "invalid framework runtime environment: \(key)"
-        case let .sourceIsSymlink(path):
-            return "managed package source must not be a symlink: \(path)"
-        case let .sourceNotRegularFile(path):
-            return "managed package source is not a regular file: \(path)"
-        case let .sourceNotExecutable(path):
-            return "framework runtime binary is not executable: \(path)"
-        case let .invalidMachO(path):
-            return "framework runtime binary is not a valid arm64 Mach-O: \(path)"
-        case let .codeSigningFailed(path):
-            return "code-signing verification failed: \(path)"
-        case let .quarantinedSource(path):
-            return "quarantined managed source is not allowed: \(path)"
-        case let .quarantineCheckFailed(path):
-            return "could not inspect quarantine state: \(path)"
         }
     }
 }
@@ -304,199 +274,6 @@ public struct CompatibilityManagedFile: Codable, Equatable, Sendable {
     }
 }
 
-public enum FrameworkRuntimeRole: String, Codable, CaseIterable, Equatable, Sendable {
-    case red4extLoader = "red4ext-loader"
-    case tweakXLPlugin = "tweakxl-plugin"
-    case archiveXLPlugin = "archivexl-plugin"
-
-    public static let required: [FrameworkRuntimeRole] = [
-        .red4extLoader,
-        .tweakXLPlugin,
-        .archiveXLPlugin,
-    ]
-
-    public var nativeGamePath: String {
-        switch self {
-        case .red4extLoader:
-            return "red4ext/RED4ext.dylib"
-        case .tweakXLPlugin:
-            return "red4ext/plugins/TweakXL.dylib"
-        case .archiveXLPlugin:
-            return "red4ext/plugins/ArchiveXL.dylib"
-        }
-    }
-}
-
-public struct FrameworkRuntimeEnvironment: Codable, Equatable, Sendable {
-    public var mode: String
-    public var paths: [String]?
-    public var value: String?
-
-    public init(mode: String, paths: [String]? = nil, value: String? = nil) {
-        self.mode = mode
-        self.paths = paths
-        self.value = value
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CompatibilityAnyCodingKey.self)
-        let expected = Set(["mode", "paths", "value"])
-        let actual = Set(container.allKeys.map(\.stringValue))
-        guard actual.isSubset(of: expected) else {
-            throw CompatibilityManifestError.invalidSchema(
-                "unknown field(s): \(actual.subtracting(expected).sorted().joined(separator: ", "))"
-            )
-        }
-        mode = try container.decode(String.self, forKey: CompatibilityAnyCodingKey(stringValue: "mode"))
-        paths = try container.decodeIfPresent(
-            [String].self,
-            forKey: CompatibilityAnyCodingKey(stringValue: "paths")
-        )
-        value = try container.decodeIfPresent(
-            String.self,
-            forKey: CompatibilityAnyCodingKey(stringValue: "value")
-        )
-    }
-}
-
-public struct FrameworkRuntimeManifest: Codable, Equatable, Sendable {
-    public static let schema = "archive-loader-framework-runtime/v1"
-
-    public var schema: String
-    public var roles: [String]
-    public var environment: [String: FrameworkRuntimeEnvironment]
-
-    public init(
-        schema: String,
-        roles: [String],
-        environment: [String: FrameworkRuntimeEnvironment]
-    ) {
-        self.schema = schema
-        self.roles = roles
-        self.environment = environment
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CompatibilityAnyCodingKey.self)
-        let expected = Set(["schema", "roles", "environment"])
-        let actual = Set(container.allKeys.map(\.stringValue))
-        guard actual.isSubset(of: expected) else {
-            throw CompatibilityManifestError.invalidSchema(
-                "unknown field(s): \(actual.subtracting(expected).sorted().joined(separator: ", "))"
-            )
-        }
-        schema = try container.decode(String.self, forKey: CompatibilityAnyCodingKey(stringValue: "schema"))
-        roles = try container.decode([String].self, forKey: CompatibilityAnyCodingKey(stringValue: "roles"))
-        environment = try container.decode(
-            [String: FrameworkRuntimeEnvironment].self,
-            forKey: CompatibilityAnyCodingKey(stringValue: "environment")
-        )
-    }
-
-    public func validate(managedFiles: [CompatibilityManagedFile]) throws {
-        guard schema == Self.schema else {
-            throw CompatibilityManifestError.invalidSchema("unsupported frameworkRuntime schema \(schema)")
-        }
-
-        let expectedRoles = Set(FrameworkRuntimeRole.required.map(\.rawValue))
-        guard Set(roles) == expectedRoles, roles.count == expectedRoles.count else {
-            throw CompatibilityManifestError.invalidRuntimeRole(roles.joined(separator: ", "))
-        }
-
-        let expectedEnvironment = Set(["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE"])
-        guard Set(environment.keys) == expectedEnvironment else {
-            throw CompatibilityManifestError.invalidRuntimeEnvironment(
-                environment.keys.sorted().joined(separator: ", ")
-            )
-        }
-
-        guard let insert = environment["DYLD_INSERT_LIBRARIES"],
-              insert.mode == "prepend",
-              insert.paths == [FrameworkRuntimeRole.red4extLoader.nativeGamePath],
-              insert.value == nil
-        else {
-            throw CompatibilityManifestError.invalidRuntimeEnvironment("DYLD_INSERT_LIBRARIES")
-        }
-
-        guard let flatNamespace = environment["DYLD_FORCE_FLAT_NAMESPACE"],
-              flatNamespace.mode == "replace",
-              flatNamespace.paths == nil,
-              flatNamespace.value == "1"
-        else {
-            throw CompatibilityManifestError.invalidRuntimeEnvironment("DYLD_FORCE_FLAT_NAMESPACE")
-        }
-
-        for role in FrameworkRuntimeRole.required {
-            let mappings = managedFiles.filter { $0.gamePath == role.nativeGamePath }
-            guard mappings.count == 1 else {
-                throw CompatibilityManifestError.invalidRuntimeRole(
-                    "\(role.rawValue) requires exactly one \(role.nativeGamePath) mapping"
-                )
-            }
-        }
-    }
-}
-
-private struct CompatibilityAnyCodingKey: CodingKey {
-    let stringValue: String
-    let intValue: Int?
-
-    init(stringValue: String) {
-        self.stringValue = stringValue
-        intValue = nil
-    }
-
-    init?(intValue: Int) {
-        stringValue = String(intValue)
-        self.intValue = intValue
-    }
-}
-
-public enum CompatibilityPreflight {
-    public typealias CommandRunner = (_ command: String, _ arguments: [String]) throws -> String
-    public typealias QuarantineChecker = (_ url: URL) throws -> Bool
-
-    public static func run(_ command: String, _ arguments: [String]) throws -> String {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [command] + arguments
-        process.standardOutput = output
-        process.standardError = output
-        do {
-            try process.run()
-        } catch {
-            throw CompatibilityManifestError.commandFailed(command)
-        }
-        process.waitUntilExit()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        guard process.terminationStatus == 0 else {
-            throw CompatibilityManifestError.commandFailed(command)
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    public static func hasQuarantine(_ url: URL) throws -> Bool {
-        #if canImport(Darwin)
-        let result = url.path.withCString { path in
-            "com.apple.quarantine".withCString { name in
-                Darwin.getxattr(path, name, nil, 0, 0, 0)
-            }
-        }
-        guard result >= 0 else {
-            let errorNumber = errno
-            guard errorNumber == ENOATTR else {
-                throw CompatibilityManifestError.quarantineCheckFailed(url.path)
-            }
-            return false
-        }
-        return true
-        #else
-        return false
-        #endif
-    }
-}
-
 public struct CompatibilityManifest: Codable, Equatable, Sendable {
     public static let schema = "cp2077-compatibility/v1"
     public static let executablePath = "Cyberpunk2077.app/Contents/MacOS/Cyberpunk2077"
@@ -506,22 +283,19 @@ public struct CompatibilityManifest: Codable, Equatable, Sendable {
     public var target: CompatibilityTarget
     public var metadataSources: CompatibilityMetadataSources
     public var managedFiles: [CompatibilityManagedFile]
-    public var frameworkRuntime: FrameworkRuntimeManifest?
 
     public init(
         schema: String,
         loaderVersion: String,
         target: CompatibilityTarget,
         metadataSources: CompatibilityMetadataSources,
-        managedFiles: [CompatibilityManagedFile],
-        frameworkRuntime: FrameworkRuntimeManifest? = nil
+        managedFiles: [CompatibilityManagedFile]
     ) {
         self.schema = schema
         self.loaderVersion = loaderVersion
         self.target = target
         self.metadataSources = metadataSources
         self.managedFiles = managedFiles
-        self.frameworkRuntime = frameworkRuntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -530,18 +304,16 @@ public struct CompatibilityManifest: Codable, Equatable, Sendable {
         case target
         case metadataSources
         case managedFiles
-        case frameworkRuntime
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        try requireKnownKeys(container, expected: ["schema", "loaderVersion", "target", "metadataSources", "managedFiles", "frameworkRuntime"])
+        try requireKnownKeys(container, expected: ["schema", "loaderVersion", "target", "metadataSources", "managedFiles"])
         schema = try container.decode(String.self, forKey: .schema)
         loaderVersion = try container.decode(String.self, forKey: .loaderVersion)
         target = try container.decode(CompatibilityTarget.self, forKey: .target)
         metadataSources = try container.decode(CompatibilityMetadataSources.self, forKey: .metadataSources)
         managedFiles = try container.decode([CompatibilityManagedFile].self, forKey: .managedFiles)
-        frameworkRuntime = try container.decodeIfPresent(FrameworkRuntimeManifest.self, forKey: .frameworkRuntime)
         try validate(allowMaskedSelfHash: true)
     }
 
@@ -609,7 +381,6 @@ public struct CompatibilityManifest: Codable, Equatable, Sendable {
         }
         guard selfEntries > 0 else { throw CompatibilityManifestError.missingSelfEntry }
         guard selfEntries == 1 else { throw CompatibilityManifestError.duplicateSelfEntry }
-        try frameworkRuntime?.validate(managedFiles: managedFiles)
     }
 
     public static func load(from url: URL) throws -> CompatibilityManifest {
@@ -685,6 +456,47 @@ public enum CompatibilityManifestCodec {
     }
 }
 
+public struct CompatibilityPackageValidationResult: Sendable {
+    public let validatedFiles: [CompatibilityManagedFile]
+
+    public init(validatedFiles: [CompatibilityManagedFile]) {
+        self.validatedFiles = validatedFiles
+    }
+}
+
+public enum CompatibilityPackageValidator {
+    public static func validate(
+        manifest: CompatibilityManifest,
+        packageRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> CompatibilityPackageValidationResult {
+        try manifest.validate()
+        let root = packageRoot.standardizedFileURL
+        for entry in manifest.managedFiles {
+            let source = try safeURL(for: entry.packagePath, under: root)
+            guard fileManager.isReadableFile(atPath: source.path) else {
+                throw CompatibilityManifestError.sourceMissing(entry.packagePath)
+            }
+            let actual: String
+            if entry.packagePath == "archive-loader/compatibility/manifest.json",
+               entry.gamePath == "archive-loader/compatibility/manifest.json" {
+                let document = try CompatibilityManifestDocument(bytes: Data(contentsOf: source))
+                actual = document.maskedSelfHash
+            } else {
+                actual = try Hashes.sha256Hex(ofFileAt: source)
+            }
+            guard actual == entry.sha256 else {
+                throw CompatibilityManifestError.sourceHashMismatch(
+                    path: entry.packagePath,
+                    expected: entry.sha256,
+                    actual: actual
+                )
+            }
+        }
+        return CompatibilityPackageValidationResult(validatedFiles: manifest.managedFiles)
+    }
+}
+
 private func requireKnownKeys<K: CodingKey>(
     _ container: KeyedDecodingContainer<K>,
     expected: Set<String>
@@ -737,6 +549,15 @@ private func isCanonicalUUID(_ value: String) -> Bool {
     return parts.joined().unicodeScalars.allSatisfy { scalar in
         (scalar.value >= 48 && scalar.value <= 57) || (scalar.value >= 97 && scalar.value <= 102)
     }
+}
+
+private func safeURL(for relativePath: String, under root: URL) throws -> URL {
+    let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
+    let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+    guard candidate.path == root.path || candidate.path.hasPrefix(rootPath) else {
+        throw CompatibilityManifestError.unsafeSourcePath(relativePath)
+    }
+    return candidate
 }
 
 private enum JSONSelfHashLocator {
